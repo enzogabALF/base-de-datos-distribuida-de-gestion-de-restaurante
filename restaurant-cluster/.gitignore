@@ -1,0 +1,5 @@
+# Ignorar datos persistentes de MySQL
+nodo1/data/
+nodo2/data/
+*.log
+.env
