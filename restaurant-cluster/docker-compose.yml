@@ -45,6 +45,52 @@ services:
       timeout: 5s
       retries: 5
 
+  mysql-nodo2:
+    image: mysql:8.0
+    container_name: restaurante_nodo2_cocina
+    hostname: nodo2-cocina
+    restart: unless-stopped
+    ports:
+      - "3308:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password_ae4
+      MYSQL_DATABASE: restaurante_db
+      MYSQL_USER: app_cocina
+      MYSQL_PASSWORD: cocina_password_ae4
+      TZ: America/Argentina/Buenos_Aires
+    command:
+      - --server-id=2
+      - --default-storage-engine=InnoDB
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --auto-increment-increment=2
+      - --auto-increment-offset=2
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --log-slave-updates=ON
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+      - --innodb-flush-log-at-trx-commit=1
+      - --sync-binlog=1
+      - --plugin-load-add=semisync_master.so
+      - --plugin-load-add=semisync_slave.so
+      - --loose-rpl-semi-sync-master-enabled=1
+      - --loose-rpl-semi-sync-slave-enabled=1
+      - --loose-rpl-semi-sync-master-wait-point=AFTER_SYNC
+      - --loose-rpl-semi-sync-master-timeout=3000
+    volumes:
+      - ./nodo2/conf/my.cnf:/etc/mysql/conf.d/my.cnf:ro
+      - ./nodo2/init:/docker-entrypoint-initdb.d:ro
+      - ./nodo2/data:/var/lib/mysql
+    networks:
+      restaurante_net:
+        ipv4_address: 172.28.0.12
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot_password_ae4"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 networks:
   restaurante_net:
     driver: bridge
