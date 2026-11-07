@@ -1,6 +1,6 @@
 -- ============================================================================
 -- AE4 - TIFAS: SCRIPTS DE ABM COMPLETO - NODO 2 (COCINA Y STOCK)
--- Operaciones Transaccionales ACID, Control de Inventario y Despacho de Comandas
+-- Operaciones Transaccionales ACID, Control de Inventario y Despacho de Comandas (SQL Puro)
 -- ============================================================================
 
 USE restaurante_db;
@@ -15,7 +15,7 @@ START TRANSACTION;
 SET @prod_id = 3; -- Bife de Chorizo Angus 400g
 SET @cant_ingreso = 20;
 
--- 1. Obtener stock actual
+-- 1. Obtener stock actual con bloqueo pesimista
 SELECT stock_disponible INTO @stock_actual 
 FROM productos_menu 
 WHERE id_producto = @prod_id FOR UPDATE;
@@ -57,33 +57,45 @@ INSERT INTO comandas (
     mozo,
     nodo_origen,
     estado,
-    total,
-    historial_estados
+    total
 ) VALUES (
     10, -- Barra
     NULL,
     'Chef Ejecutivo',
     'NODO_2_COCINA',
     'ABIERTA',
-    0.00,
-    JSON_ARRAY(
-        JSON_OBJECT(
-            'evento', 'APERTURA_COCINA_DEGUSTACION',
-            'timestamp', NOW(),
-            'autorizado_por', 'Jefe de Cocina'
-        )
-    )
+    0.00
 );
 
 SET @id_comanda_cocina = LAST_INSERT_ID();
 
+-- Auditoría relacional inicial
+INSERT INTO historial_estados_comanda (
+    id_comanda,
+    estado_anterior,
+    estado_nuevo,
+    operador,
+    nodo_emisor,
+    observacion
+) VALUES (
+    @id_comanda_cocina,
+    NULL,
+    'ABIERTA',
+    'Chef Ejecutivo',
+    'NODO_2_COCINA',
+    'Apertura interna para control de calidad de pastas'
+);
+
+-- Detalle de comanda interno
 INSERT INTO detalle_comanda (
     id_comanda,
     id_producto,
     cantidad,
     precio_unitario,
     estado_cocina,
-    especificaciones,
+    punto_coccion,
+    apto_celiaco,
+    sin_sal,
     observaciones
 ) VALUES (
     @id_comanda_cocina,
@@ -91,8 +103,10 @@ INSERT INTO detalle_comanda (
     1,
     17800.00,
     'EN_COCCION',
-    JSON_OBJECT('control_calidad', true, 'degustacion_salsa', 'Filetto'),
-    'Prueba de lote de pasta fresca'
+    'NO_APLICA',
+    FALSE,
+    FALSE,
+    'Prueba de lote de pasta fresca con salsa filetto'
 );
 
 UPDATE comandas
@@ -109,23 +123,29 @@ COMMIT;
 -- CASO 2.A: Tomar una comanda recibida del Salón e iniciar cocción
 START TRANSACTION;
 
--- Seleccionar la primera comanda disponible del salón
 SET @comanda_a_marchar = 1;
 
 -- Actualizar estado general de la comanda
 UPDATE comandas
-SET estado = 'EN_PREPARACION',
-    historial_estados = JSON_ARRAY_APPEND(
-        historial_estados,
-        '$',
-        JSON_OBJECT(
-            'evento', 'INICIO_PREPARACION',
-            'timestamp', NOW(),
-            'nodo', 'NODO_2_COCINA',
-            'responsable', 'Cocinero Turno Tarde'
-        )
-    )
+SET estado = 'EN_PREPARACION'
 WHERE id_comanda = @comanda_a_marchar;
+
+-- Registrar transición en el historial relacional
+INSERT INTO historial_estados_comanda (
+    id_comanda,
+    estado_anterior,
+    estado_nuevo,
+    operador,
+    nodo_emisor,
+    observacion
+) VALUES (
+    @comanda_a_marchar,
+    'ABIERTA',
+    'EN_PREPARACION',
+    'Jefe de Partida',
+    'NODO_2_COCINA',
+    'Ingreso a cocina: inicio de marchas de cocción'
+);
 
 -- Actualizar las líneas de detalle culinarias que estaban pendientes
 UPDATE detalle_comanda
@@ -151,17 +171,24 @@ SET estado_cocina = 'LISTO'
 WHERE id_comanda = @comanda_a_marchar AND estado_cocina = 'EN_COCCION';
 
 UPDATE comandas
-SET estado = 'LISTA_PARA_SERVIR',
-    historial_estados = JSON_ARRAY_APPEND(
-        historial_estados,
-        '$',
-        JSON_OBJECT(
-            'evento', 'CAMPANA_DESPACHO_LISTO',
-            'timestamp', NOW(),
-            'nodo', 'NODO_2_COCINA'
-        )
-    )
+SET estado = 'LISTA_PARA_SERVIR'
 WHERE id_comanda = @comanda_a_marchar;
+
+INSERT INTO historial_estados_comanda (
+    id_comanda,
+    estado_anterior,
+    estado_nuevo,
+    operador,
+    nodo_emisor,
+    observacion
+) VALUES (
+    @comanda_a_marchar,
+    'EN_PREPARACION',
+    'LISTA_PARA_SERVIR',
+    'Despachador',
+    'NODO_2_COCINA',
+    'Campana de despacho: platos listos en bandeja para retirar por mozo'
+);
 
 COMMIT;
 
@@ -206,10 +233,10 @@ COMMIT;
 
 
 -- ============================================================================
--- 4. CONSULTAS Y ANÁLISIS NoSQL / SQL (COMANDERA Y STOCK)
+-- 4. CONSULTAS Y ANÁLISIS RELACIONAL (COMANDERA Y STOCK)
 -- ============================================================================
 
--- Consulta 4.1: Pantalla / Comandera digital de cocina con especificaciones NoSQL
+-- Consulta 4.1: Pantalla / Comandera digital de cocina con especificaciones relacionales
 SELECT 
     c.id_comanda,
     c.nodo_origen,
@@ -219,8 +246,9 @@ SELECT
     p.nombre AS plato,
     d.cantidad,
     d.estado_cocina,
-    d.especificaciones->>'$.punto_carne' AS punto,
-    d.especificaciones->>'$.temperatura' AS temp,
+    d.punto_coccion,
+    d.apto_celiaco,
+    d.sin_sal,
     d.observaciones
 FROM comandas c
 JOIN mesas m ON c.id_mesa = m.id_mesa

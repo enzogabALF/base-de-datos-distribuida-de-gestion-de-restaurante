@@ -1,6 +1,6 @@
 -- ============================================================================
 -- AE4 - TIFAS: SCRIPTS DE ABM COMPLETO - NODO 1 (SALÓN Y CAJA)
--- Operaciones Transaccionales ACID, Integridad y Manejo Híbrido NoSQL (JSON)
+-- Operaciones Transaccionales ACID, Integridad y Arquitectura 100% Relacional (SQL Puro)
 -- ============================================================================
 
 USE restaurante_db;
@@ -18,44 +18,53 @@ UPDATE mesas
 SET estado = 'OCUPADA'
 WHERE id_mesa = 2 AND estado = 'LIBRE';
 
--- 2. Insertar Comanda con trazabilidad NoSQL inicial
+-- 2. Insertar Comanda
 INSERT INTO comandas (
     id_mesa,
     id_cliente,
     mozo,
     nodo_origen,
     estado,
-    total,
-    historial_estados
+    total
 ) VALUES (
     2,
     1, -- Cliente Juan Pérez
     'Carlos Gómez',
     'NODO_1_SALON',
     'ABIERTA',
-    0.00,
-    JSON_ARRAY(
-        JSON_OBJECT(
-            'evento', 'APERTURA_COMANDA',
-            'timestamp', NOW(),
-            'operador', 'Carlos Gómez',
-            'nodo', 'NODO_1_SALON'
-        )
-    )
+    0.00
 );
 
--- Obtener el ID de la comanda recién generada
 SET @id_comanda_nueva = LAST_INSERT_ID();
 
--- 3. Cargar ítems en el detalle con especificaciones culinarias NoSQL (JSON)
--- Ítem 1: Bife de Chorizo con punto de cocción y especificación
+-- 3. Registrar auditoría inicial en la tabla relacional de historial
+INSERT INTO historial_estados_comanda (
+    id_comanda,
+    estado_anterior,
+    estado_nuevo,
+    operador,
+    nodo_emisor,
+    observacion
+) VALUES (
+    @id_comanda_nueva,
+    NULL,
+    'ABIERTA',
+    'Carlos Gómez',
+    'NODO_1_SALON',
+    'Apertura de mesa y asignación inicial'
+);
+
+-- 4. Cargar ítems en el detalle con especificaciones normalizadas
+-- Ítem 1: Bife de Chorizo Angus (A punto, con papas rústicas)
 INSERT INTO detalle_comanda (
     id_comanda,
     id_producto,
     cantidad,
     precio_unitario,
     estado_cocina,
-    especificaciones,
+    punto_coccion,
+    apto_celiaco,
+    sin_sal,
     observaciones
 ) VALUES (
     @id_comanda_nueva,
@@ -63,12 +72,10 @@ INSERT INTO detalle_comanda (
     2,
     22500.00,
     'PENDIENTE',
-    JSON_OBJECT(
-        'punto_carne', 'A punto',
-        'sin_sal', false,
-        'guarnicion', 'Papas rústicas'
-    ),
-    'Uno bien dorado por fuera'
+    'A_PUNTO',
+    FALSE,
+    FALSE,
+    'Uno bien dorado por fuera con papas rústicas'
 );
 
 -- Ítem 2: Empanada Criolla
@@ -78,7 +85,9 @@ INSERT INTO detalle_comanda (
     cantidad,
     precio_unitario,
     estado_cocina,
-    especificaciones,
+    punto_coccion,
+    apto_celiaco,
+    sin_sal,
     observaciones
 ) VALUES (
     @id_comanda_nueva,
@@ -86,11 +95,10 @@ INSERT INTO detalle_comanda (
     4,
     3200.00,
     'PENDIENTE',
-    JSON_OBJECT(
-        'temperatura', 'Muy caliente',
-        'limon', true
-    ),
-    NULL
+    'NO_APLICA',
+    FALSE,
+    FALSE,
+    'Servir bien calientes con rodajas de limón'
 );
 
 -- Ítem 3: Bebida (Agua Mineral)
@@ -100,22 +108,23 @@ INSERT INTO detalle_comanda (
     cantidad,
     precio_unitario,
     estado_cocina,
-    especificaciones,
+    punto_coccion,
+    apto_celiaco,
+    sin_sal,
     observaciones
 ) VALUES (
     @id_comanda_nueva,
     9, -- Agua Mineral sin Gas
     2,
     2800.00,
-    'ENTREGADO', -- Las bebidas directas del salón se marcan entregadas
-    JSON_OBJECT(
-        'hielo', true,
-        'rodaja_limon', false
-    ),
-    NULL
+    'ENTREGADO', -- Despacho inmediato en salón
+    'NO_APLICA',
+    TRUE,
+    TRUE,
+    'Con hielo'
 );
 
--- 4. Actualizar total de la comanda en base a la columna generada STORED (subtotal)
+-- 5. Actualizar total de la comanda en base a la columna generada STORED (subtotal)
 UPDATE comandas
 SET total = (SELECT COALESCE(SUM(subtotal), 0) FROM detalle_comanda WHERE id_comanda = @id_comanda_nueva)
 WHERE id_comanda = @id_comanda_nueva;
@@ -143,7 +152,7 @@ INSERT INTO clientes (
 -- 2. MODIFICACIONES (UPDATE)
 -- ============================================================================
 
--- CASO 2.A: Agregar un nuevo plato a comanda abierta y registrar evento en NoSQL
+-- CASO 2.A: Agregar un nuevo plato a comanda abierta y registrar historial relacional
 START TRANSACTION;
 
 SET @comanda_activa = @id_comanda_nueva;
@@ -155,7 +164,9 @@ INSERT INTO detalle_comanda (
     cantidad,
     precio_unitario,
     estado_cocina,
-    especificaciones,
+    punto_coccion,
+    apto_celiaco,
+    sin_sal,
     observaciones
 ) VALUES (
     @comanda_activa,
@@ -163,42 +174,61 @@ INSERT INTO detalle_comanda (
     1,
     7200.00,
     'PENDIENTE',
-    JSON_OBJECT('cucharas_extra', 2, 'sin_gluten', false),
-    'Para compartir'
+    'NO_APLICA',
+    FALSE,
+    FALSE,
+    'Para compartir con dos cucharas'
 );
 
--- Recalcular total de la comanda y anexar evento al historial JSON
+-- Recalcular total de la comanda
 UPDATE comandas
-SET total = (SELECT SUM(subtotal) FROM detalle_comanda WHERE id_comanda = @comanda_activa),
-    historial_estados = JSON_ARRAY_APPEND(
-        historial_estados,
-        '$',
-        JSON_OBJECT(
-            'evento', 'ADICION_ITEM',
-            'timestamp', NOW(),
-            'producto_id', 7,
-            'cantidad', 1
-        )
-    )
+SET total = (SELECT SUM(subtotal) FROM detalle_comanda WHERE id_comanda = @comanda_activa)
 WHERE id_comanda = @comanda_activa;
+
+-- Registrar evento en la tabla de historial
+INSERT INTO historial_estados_comanda (
+    id_comanda,
+    estado_anterior,
+    estado_nuevo,
+    operador,
+    nodo_emisor,
+    observacion
+) VALUES (
+    @comanda_activa,
+    'ABIERTA',
+    'ABIERTA',
+    'Carlos Gómez',
+    'NODO_1_SALON',
+    'Adición de postre Volcán de Chocolate'
+);
 
 COMMIT;
 
 
--- CASO 2.B: Cambio de mozo asignado o cambio de estado de comanda
+-- CASO 2.B: Cambio de mozo asignado con registro relacional de trazabilidad
+START TRANSACTION;
+
 UPDATE comandas
-SET mozo = 'Lucía Fernández',
-    historial_estados = JSON_ARRAY_APPEND(
-        historial_estados,
-        '$',
-        JSON_OBJECT(
-            'evento', 'CAMBIO_MOZO',
-            'timestamp', NOW(),
-            'mozo_anterior', 'Carlos Gómez',
-            'nuevo_mozo', 'Lucía Fernández'
-        )
-    )
+SET mozo = 'Lucía Fernández'
 WHERE id_comanda = @comanda_activa;
+
+INSERT INTO historial_estados_comanda (
+    id_comanda,
+    estado_anterior,
+    estado_nuevo,
+    operador,
+    nodo_emisor,
+    observacion
+) VALUES (
+    @comanda_activa,
+    'ABIERTA',
+    'ABIERTA',
+    'Supervisor Salón',
+    'NODO_1_SALON',
+    'Reasignación de mozo de Carlos Gómez a Lucía Fernández'
+);
+
+COMMIT;
 
 
 -- ============================================================================
@@ -206,64 +236,69 @@ WHERE id_comanda = @comanda_activa;
 -- ============================================================================
 
 -- CASO 3.A: Baja Física controlada (Eliminar ítem de detalle antes de preparación)
--- Supongamos que el cliente decide cancelar el postre antes de cocinarse
 START TRANSACTION;
 
--- Eliminación física del ítem en detalle
 DELETE FROM detalle_comanda
 WHERE id_comanda = @comanda_activa
   AND id_producto = 7
   AND estado_cocina = 'PENDIENTE';
 
--- Recalcular total y registrar en auditoría NoSQL
+-- Recalcular total
 UPDATE comandas
-SET total = (SELECT COALESCE(SUM(subtotal), 0) FROM detalle_comanda WHERE id_comanda = @comanda_activa),
-    historial_estados = JSON_ARRAY_APPEND(
-        historial_estados,
-        '$',
-        JSON_OBJECT(
-            'evento', 'BAJA_FISICA_ITEM',
-            'timestamp', NOW(),
-            'producto_id', 7,
-            'motivo', 'Desistimiento de cliente antes de marchar'
-        )
-    )
+SET total = (SELECT COALESCE(SUM(subtotal), 0) FROM detalle_comanda WHERE id_comanda = @comanda_activa)
 WHERE id_comanda = @comanda_activa;
+
+-- Registrar en historial de auditoría
+INSERT INTO historial_estados_comanda (
+    id_comanda,
+    estado_anterior,
+    estado_nuevo,
+    operador,
+    nodo_emisor,
+    observacion
+) VALUES (
+    @comanda_activa,
+    'ABIERTA',
+    'ABIERTA',
+    'Lucía Fernández',
+    'NODO_1_SALON',
+    'Baja física de postre Volcán por desistimiento del comensal antes de marcha'
+);
 
 COMMIT;
 
 
 -- CASO 3.B: Baja Lógica (Cancelación total de comanda con motivo)
--- Simulación de apertura y cancelación inmediata de comanda por error
 START TRANSACTION;
 
-INSERT INTO comandas (id_mesa, mozo, nodo_origen, estado, total, historial_estados)
-VALUES (
-    5,
-    'Carlos Gómez',
-    'NODO_1_SALON',
-    'ABIERTA',
-    0.00,
-    JSON_ARRAY(JSON_OBJECT('evento', 'APERTURA', 'timestamp', NOW()))
-);
+INSERT INTO comandas (id_mesa, mozo, nodo_origen, estado, total)
+VALUES (5, 'Carlos Gómez', 'NODO_1_SALON', 'ABIERTA', 0.00);
 
 SET @id_cancelar = LAST_INSERT_ID();
 
--- Baja lógica: no se destruye el registro, se cambia el estado y se anexa motivo
+-- Baja lógica en la entidad comanda
 UPDATE comandas
 SET estado = 'CANCELADA',
-    fecha_cierre = NOW(),
-    historial_estados = JSON_ARRAY_APPEND(
-        historial_estados,
-        '$',
-        JSON_OBJECT(
-            'evento', 'CANCELACION_LOGICA',
-            'timestamp', NOW(),
-            'motivo', 'Error de carga de mesa por el mozo',
-            'autorizado_por', 'Jefe de Salón'
-        )
-    )
+    motivo_cancelacion = 'Error involuntario de carga de mesa por el mozo',
+    fecha_cierre = NOW()
 WHERE id_comanda = @id_cancelar;
+
+-- Auditoría relacional del evento de cancelación
+INSERT INTO historial_estados_comanda (
+    id_comanda,
+    estado_anterior,
+    estado_nuevo,
+    operador,
+    nodo_emisor,
+    observacion
+) VALUES (
+    @id_cancelar,
+    'ABIERTA',
+    'CANCELADA',
+    'Jefe de Salón',
+    'NODO_1_SALON',
+    'Cancelación autorizada: Error de carga de mesa'
+);
 
 COMMIT;
 
@@ -277,49 +312,51 @@ START TRANSACTION;
 -- 1. Transición de comanda a PAGADA
 UPDATE comandas
 SET estado = 'PAGADA',
-    fecha_cierre = NOW(),
-    historial_estados = JSON_ARRAY_APPEND(
-        historial_estados,
-        '$',
-        JSON_OBJECT(
-            'evento', 'CIERRE_Y_PAGO',
-            'timestamp', NOW(),
-            'cajero', 'Caja Salón 1'
-        )
-    )
+    fecha_cierre = NOW()
 WHERE id_comanda = @comanda_activa;
 
--- 2. Inserción de Pago con metadatos fiscales semiestructurados (NoSQL JSON)
+-- 2. Registrar en historial relacional
+INSERT INTO historial_estados_comanda (
+    id_comanda,
+    estado_anterior,
+    estado_nuevo,
+    operador,
+    nodo_emisor,
+    observacion
+) VALUES (
+    @comanda_activa,
+    'ABIERTA',
+    'PAGADA',
+    'Cajero Salón 1',
+    'NODO_1_SALON',
+    'Liquidación y cobro de ticket fiscal'
+);
+
+-- 3. Inserción de Pago 100% Relacional
 INSERT INTO pagos (
     id_comanda,
     metodo_pago,
+    tipo_comprobante,
+    numero_comprobante,
+    codigo_autorizacion,
     monto_total,
-    metadatos_fiscales,
     nodo_caja
 ) VALUES (
     @comanda_activa,
     'TARJETA_CREDITO',
+    'FACTURA_B',
+    '0001-00004521',
+    'AUT-VISA-9821',
     (SELECT total FROM comandas WHERE id_comanda = @comanda_activa),
-    JSON_OBJECT(
-        'tipo_comprobante', 'FACTURA_B',
-        'numero_ticket', '0001-00004521',
-        'cae', '74389218942109',
-        'tarjeta', JSON_OBJECT(
-            'marca', 'VISA',
-            'ultimos_cuatro', '4321',
-            'cuotas', 1,
-            'autorizacion_posnet', 'AP8921'
-        )
-    ),
     'NODO_1_SALON'
 );
 
--- 3. Sumar puntos de fidelidad al cliente (1 punto por cada $500)
+-- 4. Sumar puntos de fidelidad al cliente (1 punto por cada $500)
 UPDATE clientes
 SET puntos_fidelidad = puntos_fidelidad + FLOOR((SELECT total FROM comandas WHERE id_comanda = @comanda_activa) / 500)
 WHERE id_cliente = (SELECT id_cliente FROM comandas WHERE id_comanda = @comanda_activa);
 
--- 4. Liberar la mesa
+-- 5. Liberar la mesa
 UPDATE mesas
 SET estado = 'LIBRE'
 WHERE id_mesa = (SELECT id_mesa FROM comandas WHERE id_comanda = @comanda_activa);
@@ -328,10 +365,10 @@ COMMIT;
 
 
 -- ============================================================================
--- 5. CONSULTAS Y ANÁLISIS NoSQL / SQL (READ)
+-- 5. CONSULTAS Y ANÁLISIS RELACIONAL (READ)
 -- ============================================================================
 
--- Consulta 5.1: Vista rápida del estado actual del Salón
+-- Consulta 5.1: Estado actual del Salón (Mesas, comandas y total acumulado)
 SELECT 
     m.numero_mesa,
     m.capacidad,
@@ -345,35 +382,41 @@ FROM mesas m
 LEFT JOIN comandas c ON m.id_mesa = c.id_mesa AND c.estado IN ('ABIERTA', 'EN_PREPARACION', 'LISTA_PARA_SERVIR')
 ORDER BY m.numero_mesa;
 
--- Consulta 5.2: Búsqueda NoSQL - Extracción de campos JSON en especificaciones culinarias
+-- Consulta 5.2: Detalle de pedidos activos con preferencias culinarias normalizadas
 SELECT 
     d.id_detalle,
     d.id_comanda,
     p.nombre AS plato,
     d.cantidad,
-    JSON_UNQUOTE(JSON_EXTRACT(d.especificaciones, '$.punto_carne')) AS punto_solicitado,
-    JSON_UNQUOTE(JSON_EXTRACT(d.especificaciones, '$.guarnicion')) AS guarnicion_elegida,
-    d.especificaciones->>'$.temperatura' AS temperatura,
+    d.punto_coccion,
+    d.apto_celiaco,
+    d.sin_sal,
+    d.subtotal,
     d.observaciones
 FROM detalle_comanda d
 JOIN productos_menu p ON d.id_producto = p.id_producto
-WHERE d.especificaciones IS NOT NULL;
+WHERE d.id_comanda = @comanda_activa;
 
--- Consulta 5.3: Auditoría NoSQL - Visualizar historial cronológico de eventos de la comanda
+-- Consulta 5.3: Historial cronológico relacional de auditoría de una comanda
 SELECT 
-    c.id_comanda,
-    c.mozo,
-    c.estado,
-    c.historial_estados
-FROM comandas c
-WHERE c.id_comanda = @comanda_activa;
+    h.id_historial,
+    h.id_comanda,
+    h.estado_anterior,
+    h.estado_nuevo,
+    h.operador,
+    h.nodo_emisor,
+    h.observacion,
+    h.fecha_cambio
+FROM historial_estados_comanda h
+WHERE h.id_comanda = @comanda_activa
+ORDER BY h.fecha_cambio ASC;
 
--- Consulta 5.4: Arqueo de Caja del Nodo 1 agrupado por método de pago y desglose fiscal
+-- Consulta 5.4: Arqueo de Caja del Nodo 1 agrupado por método y tipo de comprobante
 SELECT 
     p.metodo_pago,
+    p.tipo_comprobante,
     COUNT(p.id_pago) AS cantidad_operaciones,
-    SUM(p.monto_total) AS total_recaudado,
-    JSON_UNQUOTE(JSON_EXTRACT(p.metadatos_fiscales, '$.tipo_comprobante')) AS tipo_comprobante
+    SUM(p.monto_total) AS total_recaudado
 FROM pagos p
 WHERE p.nodo_caja = 'NODO_1_SALON'
-GROUP BY p.metodo_pago, tipo_comprobante;
+GROUP BY p.metodo_pago, p.tipo_comprobante;

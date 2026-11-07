@@ -1,7 +1,7 @@
 -- ============================================================================
 -- AE4 - TIFAS: SISTEMA DISTRIBUIDO DE GESTIÓN GASTRONÓMICA
 -- ESQUEMA GLOBAL REPLICADO - NODO 1 (SALÓN / CAJA)
--- Motor Transaccional InnoDB - Integración Relacional + NoSQL (JSON)
+-- Motor Transaccional InnoDB - Arquitectura 100% Relacional (SQL Puro)
 -- ============================================================================
 
 SET sql_log_bin = 0;
@@ -72,7 +72,7 @@ CREATE TABLE IF NOT EXISTS comandas (
     nodo_origen VARCHAR(30) NOT NULL DEFAULT 'NODO_1_SALON',
     estado ENUM('ABIERTA', 'EN_PREPARACION', 'LISTA_PARA_SERVIR', 'ENTREGADA', 'PAGADA', 'CANCELADA') NOT NULL DEFAULT 'ABIERTA',
     total DECIMAL(10, 2) NOT NULL DEFAULT 0.00 CHECK (total >= 0),
-    historial_estados JSON NULL COMMENT 'Registro NoSQL de eventos y auditoría de la orden',
+    motivo_cancelacion VARCHAR(255) NULL,
     fecha_apertura DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     fecha_cierre DATETIME NULL,
     CONSTRAINT fk_comanda_mesa FOREIGN KEY (id_mesa) REFERENCES mesas(id_mesa)
@@ -81,7 +81,21 @@ CREATE TABLE IF NOT EXISTS comandas (
         ON UPDATE CASCADE ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
--- 6. Tabla de Detalle de Comanda (Líneas de Pedido y Marchas de Cocina)
+-- 6. Tabla de Historial y Auditoría de Estados de Comandas (Normalización Relacional Pura)
+CREATE TABLE IF NOT EXISTS historial_estados_comanda (
+    id_historial INT AUTO_INCREMENT PRIMARY KEY,
+    id_comanda INT NOT NULL,
+    estado_anterior ENUM('ABIERTA', 'EN_PREPARACION', 'LISTA_PARA_SERVIR', 'ENTREGADA', 'PAGADA', 'CANCELADA') NULL,
+    estado_nuevo ENUM('ABIERTA', 'EN_PREPARACION', 'LISTA_PARA_SERVIR', 'ENTREGADA', 'PAGADA', 'CANCELADA') NOT NULL,
+    operador VARCHAR(80) NOT NULL,
+    nodo_emisor VARCHAR(30) NOT NULL DEFAULT 'NODO_1_SALON',
+    observacion VARCHAR(255) NULL,
+    fecha_cambio TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_historial_comanda FOREIGN KEY (id_comanda) REFERENCES comandas(id_comanda)
+        ON UPDATE CASCADE ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- 7. Tabla de Detalle de Comanda (Líneas de Pedido y Marchas de Cocina)
 CREATE TABLE IF NOT EXISTS detalle_comanda (
     id_detalle INT AUTO_INCREMENT PRIMARY KEY,
     id_comanda INT NOT NULL,
@@ -90,7 +104,9 @@ CREATE TABLE IF NOT EXISTS detalle_comanda (
     precio_unitario DECIMAL(10, 2) NOT NULL CHECK (precio_unitario >= 0),
     subtotal DECIMAL(10, 2) GENERATED ALWAYS AS (cantidad * precio_unitario) STORED,
     estado_cocina ENUM('PENDIENTE', 'EN_COCCION', 'LISTO', 'ENTREGADO', 'ANULADO') NOT NULL DEFAULT 'PENDIENTE',
-    especificaciones JSON NULL COMMENT 'Requerimientos culinarios NoSQL (alergenos, punto, condimentos)',
+    punto_coccion ENUM('JUGOSO', 'A_PUNTO', 'COCIDO', 'MUY_COCIDO', 'NO_APLICA') NOT NULL DEFAULT 'NO_APLICA',
+    apto_celiaco BOOLEAN NOT NULL DEFAULT FALSE,
+    sin_sal BOOLEAN NOT NULL DEFAULT FALSE,
     observaciones VARCHAR(255) NULL,
     CONSTRAINT fk_detalle_comanda FOREIGN KEY (id_comanda) REFERENCES comandas(id_comanda)
         ON UPDATE CASCADE ON DELETE CASCADE,
@@ -98,13 +114,15 @@ CREATE TABLE IF NOT EXISTS detalle_comanda (
         ON UPDATE CASCADE ON DELETE RESTRICT
 ) ENGINE=InnoDB;
 
--- 7. Tabla de Pagos / Caja (Cierre y Facturación de Comandas)
+-- 8. Tabla de Pagos / Caja (Cierre y Facturación Relacional)
 CREATE TABLE IF NOT EXISTS pagos (
     id_pago INT AUTO_INCREMENT PRIMARY KEY,
     id_comanda INT NOT NULL UNIQUE,
     metodo_pago ENUM('EFECTIVO', 'TARJETA_DEBITO', 'TARJETA_CREDITO', 'TRANSFERENCIA_QR') NOT NULL,
+    tipo_comprobante ENUM('TICKET_CONSUMO', 'FACTURA_A', 'FACTURA_B', 'RECIBO_X') NOT NULL DEFAULT 'TICKET_CONSUMO',
+    numero_comprobante VARCHAR(50) NULL,
+    codigo_autorizacion VARCHAR(50) NULL,
     monto_total DECIMAL(10, 2) NOT NULL CHECK (monto_total > 0),
-    metadatos_fiscales JSON NULL COMMENT 'Datos de comprobante electrónico, CAE, lote o pasarela QR',
     fecha_pago DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     nodo_caja VARCHAR(30) NOT NULL DEFAULT 'NODO_1_SALON',
     CONSTRAINT fk_pago_comanda FOREIGN KEY (id_comanda) REFERENCES comandas(id_comanda)
