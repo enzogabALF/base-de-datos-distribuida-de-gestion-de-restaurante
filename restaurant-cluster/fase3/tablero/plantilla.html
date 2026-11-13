@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tablero del restaurante</title>
+<!--
+  AE4 - TIFAS Fase 3: tablero dimensional.
+  Plantilla autocontenida (sin librerías ni conexión a internet). Los datos los
+  inserta pruebas_fase3/generar_tablero.sh a partir de fase3/14_tablero_datos.sql.
+-->
+<style>
+  :root {
+    --fondo: #f6f5f2; --panel: #ffffff; --texto: #1f2328; --suave: #646a73; --linea: #e3e1dc;
+    --acento: #b4461f; --acento2: #2f6f8f; --acento3: #6b8f3a; --acento4: #8a5aa8;
+    --calor0: #f3ece4; --calor1: #b4461f; --positivo: #2e7d4f; --negativo: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --fondo: #16181b; --panel: #1f2226; --texto: #e8e6e3; --suave: #9aa0a6; --linea: #33373d;
+      --acento: #e07a4f; --acento2: #6fb0d1; --acento3: #9cc46a; --acento4: #b893d4;
+      --calor0: #262a2f; --calor1: #e07a4f; --positivo: #6cc28f; --negativo: #f08a80;
+    }
+  }
+  :root[data-theme="dark"] {
+    --fondo: #16181b; --panel: #1f2226; --texto: #e8e6e3; --suave: #9aa0a6; --linea: #33373d;
+    --acento: #e07a4f; --acento2: #6fb0d1; --acento3: #9cc46a; --acento4: #b893d4;
+    --calor0: #262a2f; --calor1: #e07a4f; --positivo: #6cc28f; --negativo: #f08a80;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--fondo); color: var(--texto);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { padding: 24px 16px 8px; max-width: 1200px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--suave); font-size: 13px; }
+  main { max-width: 1200px; margin: 0 auto; padding: 8px 16px 32px;
+         display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; }
+  .panel { background: var(--panel); border: 1px solid var(--linea); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+  .panel h2 { font-size: 14px; margin: 0 0 2px; }
+  .panel .nota { color: var(--suave); font-size: 12px; margin: 0 0 10px; }
+  .c3 { grid-column: span 3; } .c4 { grid-column: span 4; } .c5 { grid-column: span 5; }
+  .c6 { grid-column: span 6; } .c7 { grid-column: span 7; } .c8 { grid-column: span 8; } .c12 { grid-column: span 12; }
+  @media (max-width: 900px) { .c3 { grid-column: span 6; } .c4, .c5, .c6, .c7, .c8 { grid-column: span 12; } }
+  @media (max-width: 520px) { .c3 { grid-column: span 12; } }
+  .kpi .valor { font-size: 26px; font-weight: 650; letter-spacing: -0.5px; }
+  .kpi .delta { font-size: 12px; margin-top: 2px; }
+  .positivo { color: var(--positivo); } .negativo { color: var(--negativo); }
+  svg { display: block; width: 100%; height: auto; }
+  svg text { fill: var(--suave); font-size: 11px; }
+  .eje { stroke: var(--linea); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 6px; border-bottom: 1px solid var(--linea); vertical-align: middle; }
+  th { color: var(--suave); font-weight: 500; font-size: 12px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .barra { height: 8px; border-radius: 4px; background: var(--acento); }
+  .barra.b2 { background: var(--acento2); }
+  .fila-barra { display: grid; grid-template-columns: minmax(110px, 38%) 1fr auto; gap: 8px; align-items: center; margin: 6px 0; }
+  .fila-barra .etq { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fila-barra .val { font-variant-numeric: tabular-nums; color: var(--suave); font-size: 12px; }
+  .leyenda { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--suave); margin-top: 6px; }
+  .leyenda i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  .calor { display: grid; grid-template-columns: 44px repeat(var(--cols), 1fr); gap: 2px; font-size: 11px; }
+  .calor div { min-height: 22px; border-radius: 3px; display: flex; align-items: center; justify-content: center; }
+  .calor .rot { color: var(--suave); justify-content: flex-start; }
+  .chip { display: inline-block; padding: 1px 7px; border-radius: 10px; background: var(--calor0); font-size: 12px; }
+  footer { max-width: 1200px; margin: 0 auto; padding: 0 16px 28px; color: var(--suave); font-size: 12px; }
+  .scroll { overflow-x: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Tablero de gestión del restaurante</h1>
+  <div class="sub" id="sub"></div>
+</header>
+<main>
+  <section class="panel c3 kpi"><h2>Facturación</h2><p class="nota">Enero a octubre de 2026</p><div class="valor" id="k-fact"></div><div class="delta" id="k-fact-d"></div></section>
+  <section class="panel c3 kpi"><h2>Tickets</h2><p class="nota">Comandas cobradas</p><div class="valor" id="k-tick"></div><div class="delta" id="k-tick-d"></div></section>
+  <section class="panel c3 kpi"><h2>Ticket promedio</h2><p class="nota">Facturación / tickets</p><div class="valor" id="k-prom"></div><div class="delta" id="k-prom-d"></div></section>
+  <section class="panel c3 kpi"><h2>Margen bruto</h2><p class="nota">Sobre el costo de la planilla de proveedores</p><div class="valor" id="k-marg"></div><div class="delta" id="k-marg-d"></div></section>
+
+  <section class="panel c8"><h2>Facturación mensual</h2><p class="nota">Vista materializada mv_ventas_mensuales · importe y margen</p><div id="g-mensual"></div>
+    <div class="leyenda"><span><i style="background:var(--acento)"></i>Importe</span><span><i style="background:var(--acento2)"></i>Margen</span></div></section>
+  <section class="panel c4"><h2>Ventas por categoría</h2><p class="nota">2026 · margen sobre el importe de cada categoría</p><div id="g-categorias"></div></section>
+
+  <section class="panel c7"><h2>Tickets por día y hora</h2><p class="nota">2026 · dónde se concentra la demanda</p><div class="scroll" id="g-calor"></div></section>
+  <section class="panel c5"><h2>Sector y turno</h2><p class="nota">2026 · importe por sector del salón</p><div id="g-sectores"></div>
+    <div class="leyenda"><span><i style="background:var(--acento)"></i>Cena</span><span><i style="background:var(--acento2)"></i>Almuerzo</span></div></section>
+
+  <section class="panel c6"><h2>Productos más vendidos</h2><p class="nota">2026 · por importe</p><div id="g-productos"></div></section>
+  <section class="panel c6"><h2>Tiempo de preparación por hora</h2><p class="nota">Log del KDS (ago-oct 2026) · minutos promedio por estación</p><div id="g-prep"></div><div class="leyenda" id="ley-prep"></div></section>
+
+  <section class="panel c7"><h2>Qué se pide junto (reglas de asociación)</h2><p class="nota">KDD · Apriori sobre los tickets · lift &gt; 1 = se piden juntos más de lo esperable</p><div class="scroll" id="t-reglas"></div></section>
+  <section class="panel c5"><h2>Segmentos de clientes (RFM)</h2><p class="nota">KDD · recencia, frecuencia y monto al 31/10/2026</p><div id="t-rfm"></div></section>
+
+  <section class="panel c12"><h2>Medios de pago</h2><p class="nota">2026 · participación en la facturación</p><div id="g-pagos"></div></section>
+</main>
+<footer id="pie"></footer>
+
+<script>
+const DATOS =
+// DATOS
+null
+;
+
+const $ = id => document.getElementById(id);
+const nf = new Intl.NumberFormat('es-AR', { maximumFractionDigits: 0 });
+const nf1 = new Intl.NumberFormat('es-AR', { maximumFractionDigits: 1, minimumFractionDigits: 1 });
+const pesos = v => '$ ' + nf.format(v);
+const millones = v => '$ ' + nf1.format(v / 1e6) + ' M';
+const pct = v => nf1.format(v * 100) + ' %';
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+const DIAS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+const NOMBRE = { PLATO_PRINCIPAL: 'Platos principales', ENTRADA: 'Entradas', POSTRE: 'Postres', BEBIDA: 'Bebidas',
+  EFECTIVO: 'Efectivo', TARJETA_DEBITO: 'Débito', TARJETA_CREDITO: 'Crédito', TRANSFERENCIA_QR: 'Transferencia / QR',
+  PARRILLA: 'Parrilla', COCINA_CALIENTE: 'Cocina', PASTELERIA: 'Pastelería', BARRA: 'Barra' };
+const nombre = k => NOMBRE[k] || k;
+
+function delta(el, actual, anterior, sufijo) {
+  const d = actual / anterior - 1;
+  el.className = 'delta ' + (d >= 0 ? 'positivo' : 'negativo');
+  el.textContent = (d >= 0 ? '▲ ' : '▼ ') + pct(Math.abs(d)) + ' ' + sufijo;
+}
+
+function barras(cont, filas, fmt, clase) {
+  const max = Math.max(...filas.map(f => f.v));
+  cont.innerHTML = filas.map(f => `<div class="fila-barra"><span class="etq" title="${f.e}">${f.e}</span>
+    <div><div class="barra ${clase || ''}" style="width:${(f.v / max * 100).toFixed(1)}%"></div></div>
+    <span class="val">${fmt(f)}</span></div>`).join('');
+}
+
+function lineas(cont, etiquetas, series, opciones) {
+  const W = 760, H = 240, m = { i: 56, d: 10, s: 10, a: 26 };
+  const todos = series.flatMap(s => s.valores);
+  const max = Math.max(...todos) * 1.05, min = opciones.desdeCero ? 0 : Math.min(...todos) * 0.9;
+  const x = i => m.i + i * (W - m.i - m.d) / (etiquetas.length - 1);
+  const y = v => H - m.a - (v - min) / (max - min) * (H - m.s - m.a);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${opciones.titulo}">`;
+  for (let k = 0; k <= 4; k++) {
+    const v = min + (max - min) * k / 4;
+    svg += `<line class="eje" x1="${m.i}" x2="${W - m.d}" y1="${y(v)}" y2="${y(v)}"/>`;
+    svg += `<text x="${m.i - 6}" y="${y(v) + 4}" text-anchor="end">${opciones.fmtEje(v)}</text>`;
+  }
+  etiquetas.forEach((e, i) => {
+    if (i % (opciones.cadaEtiqueta || 1) === 0) svg += `<text x="${x(i)}" y="${H - 8}" text-anchor="middle">${e}</text>`;
+  });
+  series.forEach(s => {
+    const p = s.valores.map((v, i) => `${x(i)},${y(v)}`).join(' ');
+    if (s.area) svg += `<polygon points="${x(0)},${y(min)} ${p} ${x(s.valores.length - 1)},${y(min)}" fill="${s.color}" opacity="0.12"/>`;
+    svg += `<polyline points="${p}" fill="none" stroke="${s.color}" stroke-width="2.2" stroke-linejoin="round"/>`;
+  });
+  cont.innerHTML = svg + '</svg>';
+}
+
+function dibujar() {
+  const D = DATOS;
+  $('sub').textContent = `Generado el ${D.generado_en} desde ${D.nodo} · vista materializada refrescada por última vez el ${D.refrescos.ultimo}`;
+
+  // KPIs
+  const tickProm = D.kpi.facturacion / D.tickets.actual, tickPromAnt = D.kpi.facturacion_anterior / D.tickets.anterior;
+  $('k-fact').textContent = millones(D.kpi.facturacion);
+  delta($('k-fact-d'), D.kpi.facturacion, D.kpi.facturacion_anterior, 'contra ene-oct 2025');
+  $('k-tick').textContent = nf.format(D.tickets.actual);
+  delta($('k-tick-d'), D.tickets.actual, D.tickets.anterior, 'contra ene-oct 2025');
+  $('k-prom').textContent = pesos(tickProm);
+  delta($('k-prom-d'), tickProm, tickPromAnt, 'nominal, con inflación');
+  $('k-marg').textContent = pct(D.kpi.margen / D.kpi.facturacion);
+  $('k-marg-d').textContent = millones(D.kpi.margen) + ' de margen';
+
+  // Mensual
+  const mensual = D.mensual.slice().sort((a, b) => a.periodo.localeCompare(b.periodo));
+  lineas($('g-mensual'), mensual.map(m => MESES[+m.periodo.slice(5) - 1] + (m.periodo.slice(5) === '01' ? ' ' + m.periodo.slice(2, 4) : '')),
+    [{ valores: mensual.map(m => m.importe), color: css('--acento'), area: true },
+     { valores: mensual.map(m => m.margen), color: css('--acento2') }],
+    { titulo: 'Facturación mensual', desdeCero: true, fmtEje: v => nf.format(v / 1e6) + ' M', cadaEtiqueta: 2 });
+
+  // Categorías
+  barras($('g-categorias'), D.categorias.sort((a, b) => b.importe - a.importe)
+    .map(c => ({ e: nombre(c.nombre), v: c.importe, m: c.margen / c.importe })),
+    f => millones(f.v) + ' · ' + pct(f.m));
+
+  // Mapa de calor
+  const horas = [...new Set(D.mapa_calor.map(c => c.hora))].sort((a, b) => a - b);
+  const maxT = Math.max(...D.mapa_calor.map(c => c.tickets));
+  const celda = (d, h) => (D.mapa_calor.find(c => c.dia === d && c.hora === h) || { tickets: 0 }).tickets;
+  let html = `<div class="calor" style="--cols:${horas.length}"><div></div>` + horas.map(h => `<div class="rot">${h} h</div>`).join('');
+  for (let d = 1; d <= 7; d++) {
+    html += `<div class="rot">${DIAS[d - 1]}</div>`;
+    horas.forEach(h => {
+      const t = celda(d, h), a = t / maxT;
+      html += `<div title="${DIAS[d - 1]} ${h} h: ${nf.format(t)} tickets" style="background:color-mix(in srgb, var(--calor1) ${Math.round(a * 100)}%, var(--calor0));color:${a > 0.55 ? '#fff' : 'inherit'}">${nf.format(t)}</div>`;
+    });
+  }
+  $('g-calor').innerHTML = html + '</div>';
+
+  // Sectores (barras apiladas cena + almuerzo)
+  const sect = {};
+  D.sectores.forEach(s => { sect[s.sector] = sect[s.sector] || { CENA: 0, ALMUERZO: 0 }; sect[s.sector][s.turno] = (sect[s.sector][s.turno] || 0) + s.importe; });
+  const maxS = Math.max(...Object.values(sect).map(s => s.CENA + s.ALMUERZO));
+  $('g-sectores').innerHTML = Object.entries(sect).sort((a, b) => (b[1].CENA + b[1].ALMUERZO) - (a[1].CENA + a[1].ALMUERZO)).map(([n, s]) =>
+    `<div class="fila-barra"><span class="etq">${n}</span><div style="display:flex">
+      <div class="barra" style="width:${(s.CENA / maxS * 100).toFixed(1)}%;border-radius:4px 0 0 4px"></div>
+      <div class="barra b2" style="width:${(s.ALMUERZO / maxS * 100).toFixed(1)}%;border-radius:0 4px 4px 0"></div></div>
+      <span class="val">${millones(s.CENA + s.ALMUERZO)}</span></div>`).join('');
+
+  // Productos
+  barras($('g-productos'), D.productos.sort((a, b) => b.importe - a.importe).slice(0, 8)
+    .map(p => ({ e: p.nombre, v: p.importe, u: p.unidades })), f => millones(f.v) + ' · ' + nf.format(f.u) + ' u.', 'b2');
+
+  // Preparación por hora
+  const estaciones = ['PARRILLA', 'COCINA_CALIENTE', 'PASTELERIA', 'BARRA'];
+  const colores = [css('--acento'), css('--acento2'), css('--acento4'), css('--acento3')];
+  const hp = [...new Set(D.preparacion.map(p => p.hora))].filter(h => h >= 12).sort((a, b) => a - b);
+  lineas($('g-prep'), hp.map(h => h + ' h'), estaciones.map((e, i) => ({
+      valores: hp.map(h => (D.preparacion.find(p => p.estacion === e && p.hora === h) || { minutos: null }).minutos ?? 0),
+      color: colores[i] })),
+    { titulo: 'Tiempo de preparación', desdeCero: true, fmtEje: v => nf1.format(v) + ' min' });
+  $('ley-prep').innerHTML = estaciones.map((e, i) => `<span><i style="background:${colores[i]}"></i>${nombre(e)}</span>`).join('');
+
+  // Reglas
+  $('t-reglas').innerHTML = '<table><tr><th>Quien pide</th><th>también pide</th><th class="num">Confianza</th><th class="num">Lift</th></tr>' +
+    D.reglas.sort((a, b) => b.lift - a.lift).map(r => `<tr><td>${r.a}</td><td>${r.b}</td><td class="num">${pct(r.confianza)}</td>
+      <td class="num"><span class="chip">${nf1.format(r.lift)}×</span></td></tr>`).join('') + '</table>';
+
+  // RFM
+  const totalM = D.segmentos.reduce((s, x) => s + x.monto, 0);
+  $('t-rfm').innerHTML = '<table><tr><th>Segmento</th><th class="num">Clientes</th><th class="num">Visitas</th><th class="num">% ventas</th></tr>' +
+    D.segmentos.sort((a, b) => b.monto - a.monto).map(s => `<tr><td>${s.segmento}</td><td class="num">${nf.format(s.clientes)}</td>
+      <td class="num">${nf1.format(s.frecuencia)}</td><td class="num">${pct(s.monto / totalM)}</td></tr>`).join('') + '</table>';
+
+  // Medios de pago
+  const totalP = D.medios_pago.reduce((s, x) => s + x.importe, 0);
+  barras($('g-pagos'), D.medios_pago.sort((a, b) => b.importe - a.importe)
+    .map(p => ({ e: nombre(p.metodo), v: p.importe })), f => pct(f.v / totalP) + ' · ' + millones(f.v));
+
+  $('pie').textContent = `Data warehouse restaurante_dw · ${nf.format(D.volumen.hechos_ventas)} hechos de ventas en ${D.volumen.particiones} particiones mensuales · ` +
+    `${nf.format(D.volumen.hechos_preparacion)} eventos de cocina · fuentes: base relacional, planilla de costos de proveedores y log del KDS · ` +
+    `${D.refrescos.cantidad} refrescos de la vista materializada registrados.`;
+}
+
+if (DATOS) dibujar(); else document.querySelector('main').innerHTML = '<p>Sin datos: ejecutar pruebas_fase3/generar_tablero.sh</p>';
+</script>
+</body>
+</html>

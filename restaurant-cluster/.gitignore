@@ -6,3 +6,8 @@ nodo2/data/
 
 # Respaldos generados por el servicio de backup (Fase 2)
 backups/
+
+# Log del KDS generado por la Fase 3 (se regenera en cada ejecución)
+fase3/fuentes/*.log
+# Resultados intermedios del tablero
+fase3/tablero/*.json

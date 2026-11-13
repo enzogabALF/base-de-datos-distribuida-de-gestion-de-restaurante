@@ -1,0 +1,836 @@
+Prueba: ejecutar_fase3 | Fecha: 2026-11-13 16:28:38 | Equipo: MINGW64_NT-10.0-26300
+
+==================================================================
+ FASE 3: TUNING, INDEXACIÓN, PARTICIONAMIENTO, VISTAS MATERIALIZADAS Y KDD
+==================================================================
+
+>> 0. Reinicio del clúster desde cero
+ Container restaurante_backup Stopping 
+ Container restaurante_haproxy Stopping 
+ Container restaurante_haproxy Stopped 
+ Container restaurante_haproxy Removing 
+ Container restaurante_haproxy Removed 
+ Container restaurante_backup Stopped 
+ Container restaurante_backup Removing 
+ Container restaurante_backup Removed 
+ Container restaurante_nodo2_cocina Stopping 
+ Container restaurante_nodo1_salon Stopping 
+ Container restaurante_nodo1_salon Stopped 
+ Container restaurante_nodo1_salon Removing 
+ Container restaurante_nodo1_salon Removed 
+ Container restaurante_nodo2_cocina Stopped 
+ Container restaurante_nodo2_cocina Removing 
+ Container restaurante_nodo2_cocina Removed 
+ Network restaurant-cluster_restaurante_net Removing 
+ Network restaurant-cluster_restaurante_net Removed 
+ Image restaurante-backup:8.0.46 Building 
+ Image restaurante-backup:8.0.46 Built 
+ Network restaurant-cluster_restaurante_net Creating 
+ Network restaurant-cluster_restaurante_net Created 
+ Container restaurante_nodo2_cocina Creating 
+ Container restaurante_nodo1_salon Creating 
+ Container restaurante_nodo1_salon Created 
+ Container restaurante_nodo2_cocina Created 
+ Container restaurante_haproxy Creating 
+ Container restaurante_backup Creating 
+ Container restaurante_haproxy Created 
+ Container restaurante_backup Created 
+ Container restaurante_nodo2_cocina Starting 
+ Container restaurante_nodo1_salon Starting 
+ Container restaurante_nodo2_cocina Started 
+ Container restaurante_nodo1_salon Started 
+ Container restaurante_backup Starting 
+ Container restaurante_haproxy Starting 
+ Container restaurante_haproxy Started 
+ Container restaurante_backup Started 
+   [OK] nodo1/data, nodo2/data y backups/ eliminados
+   [OK] nodos healthy y replicación bidireccional activa
+   [OK] verificacion_tecnica_nodo1.sql (Nodo 1)
+   [OK] abm_salon.sql (Nodo 1)
+   [OK] abm_cocina.sql (Nodo 2)
+   [OK] verificacion_tecnica_nodo2.sql (Nodo 2)
+   [OK] Salón (3310) -> nodo1-salon | Cocina (3311) -> nodo2-cocina
+   [OK] restaurante_nodo1_salon: Replica_IO_Running=Yes, Replica_SQL_Running=Yes
+   [OK] restaurante_nodo2_cocina: Replica_IO_Running=Yes, Replica_SQL_Running=Yes
+   [OK] ambos nodos ejecutaron el mismo conjunto de transacciones
+   [OK] CONSISTENTE: las 8 tablas son idénticas en ambos nodos
+
+>> Precondiciones: contenedores sanos y replicación activa en ambos sentidos
+   [OK] nodos healthy, replicación IO/SQL corriendo, HAProxy y backup activos
+
+>> Verificando que el clúster esté en el estado inicial
+   [OK] sin índices de la Fase 3 ni data warehouse
+
+>> 1. Carga masiva de datos históricos (fase3/01_carga_masiva.sql)
+   +-------------------------------+----------------------------+
+   | inicio                        | hora                       |
+   +-------------------------------+----------------------------+
+   | Carga masiva: 120000 comandas | 2026-11-13 16:29:26.810338 |
+   +-------------------------------+----------------------------+
+   +----------------+
+   | segundos_carga |
+   +----------------+
+   |           54.7 |
+   +----------------+
+   +---------------------------+--------+
+   | tabla                     | filas  |
+   +---------------------------+--------+
+   | clientes                  |   3005 |
+   | comandas                  | 120007 |
+   | detalle_comanda           | 310440 |
+   | historial_estados_comanda | 470328 |
+   | pagos                     | 115160 |
+   +---------------------------+--------+
+
+>> 2A. Reportes en el estado inicial (planes de ejecución con EXPLAIN ANALYZE)
+   Estadísticas que el optimizador tiene de las tablas chicas (TABLE_ROWS):
+      clientes                     2974 filas estimadas
+      comandas                     119450 filas estimadas
+      detalle_comanda              308207 filas estimadas
+      historial_estados_comanda    470328 filas estimadas
+      mesas                        10 filas estimadas
+      movimientos_stock            17 filas estimadas
+      pagos                        115160 filas estimadas
+      productos_menu               0 filas estimadas
+   Filas reales en productos_menu: 12
+   r1_ventas_por_categoria         828.0 ms
+        -> Sort: mes, importe DESC  (actual time=828..828 rows=12 loops=1)
+            -> Stream results  (actual time=808..828 rows=12 loops=1)
+                -> Group aggregate: count(distinct comandas.id_comanda), sum(detalle_comanda.cantidad), sum(detalle_comanda.subtotal)  (actual time=808..828 rows=12 loops=1)
+                    -> Sort: mes, p.categoria  (actual time=806..809 rows=50710 loops=1)
+                        -> Stream results  (cost=13595 rows=1401) (actual time=2.57..784 rows=50710 loops=1)
+                            -> Nested loop inner join  (cost=13595 rows=1401) (actual time=2.56..762 rows=50710 loops=1)
+                                -> Nested loop inner join  (cost=3788 rows=28019) (actual time=2.53..431 rows=310440 loops=1)
+                                    -> Table scan on p  (cost=0.35 rows=1) (actual time=0.0162..0.0506 rows=12 loops=1)
+                                    -> Index lookup on d using fk_detalle_producto (id_producto=p.id_producto)  (cost=3788 rows=28019) (actual time=2.28..34.7 rows=25870 loops=12)
+                                -> Filter: ((c.estado = 'PAGADA') and (c.fecha_apertura >= TIMESTAMP'2026-08-01 00:00:00') and (c.fecha_apertura < TIMESTAMP'2026-11-01 00:00:00'))  (cost=0.25 rows=0.05) (actual time=972e-6..983e-6
+                                    -> Single-row index lookup on c using PRIMARY (id_comanda=d.id_comanda)  (cost=0.25 rows=1) (actual time=743e-6..763e-6 rows=1 loops=310440)
+   r2_arqueo_de_caja                47.9 ms
+        -> Sort: dia, pg.metodo_pago, m.sector  (actual time=52.9..52.9 rows=372 loops=1)
+            -> Table scan on <temporary>  (actual time=52.2..52.3 rows=372 loops=1)
+                -> Aggregate using temporary table  (actual time=52.2..52.2 rows=372 loops=1)
+                    -> Nested loop inner join  (cost=20471 rows=12793) (actual time=0.0609..43.4 rows=7013 loops=1)
+                        -> Nested loop inner join  (cost=15994 rows=12793) (actual time=0.0546..38.4 rows=7013 loops=1)
+                            -> Filter: ((pg.fecha_pago >= TIMESTAMP'2026-10-01 00:00:00') and (pg.fecha_pago < TIMESTAMP'2026-11-01 00:00:00'))  (cost=11516 rows=12793) (actual time=0.048..30 rows=7013 loops=1)
+                                -> Table scan on pg  (cost=11516 rows=115160) (actual time=0.0448..23.9 rows=115160 loops=1)
+                            -> Single-row index lookup on c using PRIMARY (id_comanda=pg.id_comanda)  (cost=0.25 rows=1) (actual time=0.00104..0.00106 rows=1 loops=7013)
+                        -> Single-row index lookup on m using PRIMARY (id_mesa=c.id_mesa)  (cost=0.25 rows=1) (actual time=572e-6..593e-6 rows=1 loops=7013)
+   r3_ranking_mozos                305.0 ms
+        -> Sort: facturado DESC  (actual time=305..305 rows=6 loops=1)
+            -> Table scan on <temporary>  (actual time=305..305 rows=6 loops=1)
+                -> Aggregate using temporary table  (actual time=305..305 rows=6 loops=1)
+                    -> Nested loop inner join  (cost=15808 rows=1593) (actual time=0.0687..284 rows=19611 loops=1)
+                        -> Filter: ((c.estado = 'PAGADA') and (c.fecha_apertura >= TIMESTAMP'2026-08-01 00:00:00') and (c.fecha_apertura < TIMESTAMP'2026-11-01 00:00:00'))  (cost=12097 rows=2212) (actual time=0.0344..47.8 rows=196
+                            -> Table scan on c  (cost=12097 rows=119450) (actual time=0.0292..30.9 rows=120007 loops=1)
+                        -> Filter: (h.estado_nuevo = 'LISTA_PARA_SERVIR')  (cost=1.25 rows=0.72) (actual time=0.0114..0.0118 rows=1 loops=19611)
+                            -> Index lookup on h using fk_historial_comanda (id_comanda=c.id_comanda)  (cost=1.25 rows=4.32) (actual time=0.0107..0.0113 rows=4 loops=19611)
+   r4_pedidos_festejo              364.0 ms
+        -> Sort: pedidos DESC  (actual time=411..411 rows=11 loops=1)
+            -> Table scan on <temporary>  (actual time=411..411 rows=11 loops=1)
+                -> Aggregate using temporary table  (actual time=411..411 rows=11 loops=1)
+                    -> Nested loop inner join  (cost=3788 rows=3113) (actual time=0.302..407 rows=3113 loops=1)
+                        -> Table scan on p  (cost=0.35 rows=1) (actual time=0.0216..0.054 rows=12 loops=1)
+                        -> Filter: (d.observaciones like '%cumpleaños%')  (cost=1298 rows=3113) (actual time=1.87..33.9 rows=259 loops=12)
+                            -> Index lookup on d using fk_detalle_producto (id_producto=p.id_producto)  (cost=1298 rows=28019) (actual time=0.107..31.9 rows=25870 loops=12)
+   r5_cierre_del_dia                24.7 ms
+        -> Table scan on <temporary>  (actual time=24.7..24.7 rows=4 loops=1)
+            -> Aggregate using temporary table  (actual time=24.7..24.7 rows=4 loops=1)
+                -> Filter: (cast(pg.fecha_pago as date) = '2026-10-15')  (cost=11516 rows=115160) (actual time=0.147..24.4 rows=266 loops=1)
+                    -> Table scan on pg  (cost=11516 rows=115160) (actual time=0.0568..18.4 rows=115160 loops=1)
+   r6_mejores_clientes             123.0 ms
+        -> Limit: 10 row(s)  (actual time=164..164 rows=10 loops=1)
+            -> Sort: gastado DESC, limit input to 10 row(s) per chunk  (actual time=164..164 rows=10 loops=1)
+                -> Stream results  (cost=303 rows=2974) (actual time=0.0845..163 rows=3005 loops=1)
+                    -> Table scan on cl  (cost=303 rows=2974) (actual time=0.0405..0.891 rows=3005 loops=1)
+        -> Select #2 (subquery in projection; dependent)
+            -> Aggregate: count(0)  (cost=13.9 rows=1) (actual time=0.0299..0.0299 rows=1 loops=3005)
+                -> Filter: ((year(c.fecha_apertura) = 2026) and (c.estado = 'PAGADA'))  (cost=13.1 rows=8.19) (actual time=0.00808..0.0291 rows=11.1 loops=3005)
+                    -> Index lookup on c using fk_comanda_cliente (id_cliente=cl.id_cliente)  (cost=13.1 rows=49.2) (actual time=0.00766..0.0265 rows=21.9 loops=3005)
+        -> Select #3 (subquery in projection; dependent)
+            -> Aggregate: sum(c.total)  (cost=13.9 rows=1) (actual time=0.0228..0.0228 rows=1 loops=3005)
+                -> Filter: ((year(c.fecha_apertura) = 2026) and (c.estado = 'PAGADA'))  (cost=13.1 rows=8.19) (actual time=0.00525..0.0212 rows=11.1 loops=3005)
+                    -> Index lookup on c using fk_comanda_cliente (id_cliente=cl.id_cliente)  (cost=13.1 rows=49.2) (actual time=0.00487..0.0187 rows=21.9 loops=3005)
+
+>> 2B. Reportes después de actualizar las estadísticas (ANALYZE TABLE)
+   r1_ventas_por_categoria         200.0 ms
+   r2_arqueo_de_caja                42.2 ms
+   r3_ranking_mozos                226.0 ms
+   r4_pedidos_festejo               72.4 ms
+   r5_cierre_del_dia                20.4 ms
+   r6_mejores_clientes             130.0 ms
+
+>> 2C. Estrategia de indexación (fase3/03_indices.sql)
+   +-------------------------+-----------+----------+-----------------------------------------------------------+
+   | Table                   | Op        | Msg_type | Msg_text                                                  |
+   +-------------------------+-----------+----------+-----------------------------------------------------------+
+   | restaurante_db.comandas | histogram | status   | Histogram statistics created for column 'estado'.         |
+   | restaurante_db.comandas | histogram | status   | Histogram statistics created for column 'fecha_apertura'. |
+   +-------------------------+-----------+----------+-----------------------------------------------------------+
+   +----------------------+-----------+----------+--------------------------------------------------------+
+   | Table                | Op        | Msg_type | Msg_text                                               |
+   +----------------------+-----------+----------+--------------------------------------------------------+
+   | restaurante_db.pagos | histogram | status   | Histogram statistics created for column 'metodo_pago'. |
+   +----------------------+-----------+----------+--------------------------------------------------------+
+   +------------------------------------------+---------+----------+----------+
+   | Table                                    | Op      | Msg_type | Msg_text |
+   +------------------------------------------+---------+----------+----------+
+   | restaurante_db.comandas                  | analyze | status   | OK       |
+   | restaurante_db.detalle_comanda           | analyze | status   | OK       |
+   | restaurante_db.pagos                     | analyze | status   | OK       |
+   | restaurante_db.historial_estados_comanda | analyze | status   | OK       |
+   +------------------------------------------+---------+----------+----------+
+   +---------------+---------------------+
+   | INDEX_NAME    | tipo_real_en_innodb |
+   +---------------+---------------------+
+   | idx_demo_hash | BTREE               |
+   +---------------+---------------------+
+   +----------------------------+
+   | adaptive_hash_index_activo |
+   +----------------------------+
+   |                          1 |
+   +----------------------------+
+   +---------------------------+-----------------------------------+----------+------------------------------------------+
+   | tabla                     | indice                            | tipo     | columnas                                 |
+   +---------------------------+-----------------------------------+----------+------------------------------------------+
+   | comandas                  | fk_comanda_mesa                   | BTREE    | id_mesa                                  |
+   | comandas                  | idx_comandas_cliente_estado_fecha | BTREE    | id_cliente,estado,fecha_apertura,total   |
+   | comandas                  | idx_comandas_estado_fecha         | BTREE    | estado,fecha_apertura,mozo,total         |
+   | comandas                  | PRIMARY                           | BTREE    | id_comanda                               |
+   | detalle_comanda           | fk_detalle_producto               | BTREE    | id_producto                              |
+   | detalle_comanda           | ft_detalle_observaciones          | FULLTEXT | observaciones                            |
+   | detalle_comanda           | idx_detalle_comanda_cobertura     | BTREE    | id_comanda,id_producto,cantidad,subtotal |
+   | detalle_comanda           | PRIMARY                           | BTREE    | id_detalle                               |
+   | historial_estados_comanda | idx_historial_comanda_estado      | BTREE    | id_comanda,estado_nuevo,fecha_cambio     |
+   | historial_estados_comanda | PRIMARY                           | BTREE    | id_historial                             |
+   | pagos                     | id_comanda                        | BTREE    | id_comanda                               |
+   | pagos                     | idx_pagos_fecha_metodo            | BTREE    | fecha_pago,metodo_pago,monto_total       |
+   | pagos                     | PRIMARY                           | BTREE    | id_pago                                  |
+   +---------------------------+-----------------------------------+----------+------------------------------------------+
+   r1_ventas_por_categoria         138.0 ms
+        -> Sort: mes, importe DESC  (actual time=138..138 rows=12 loops=1)
+            -> Stream results  (actual time=121..138 rows=12 loops=1)
+                -> Group aggregate: count(distinct comandas.id_comanda), sum(detalle_comanda.cantidad), sum(detalle_comanda.subtotal)  (actual time=121..138 rows=12 loops=1)
+                    -> Sort: mes, p.categoria  (actual time=120..122 rows=50710 loops=1)
+                        -> Stream results  (cost=91601 rows=98741) (actual time=0.0485..103 rows=50710 loops=1)
+                            -> Nested loop inner join  (cost=91601 rows=98741) (actual time=0.0446..85.6 rows=50710 loops=1)
+                                -> Nested loop inner join  (cost=57042 rows=98741) (actual time=0.04..55 rows=50710 loops=1)
+                                    -> Filter: ((c.estado = 'PAGADA') and (c.fecha_apertura >= TIMESTAMP'2026-08-01 00:00:00') and (c.fecha_apertura < TIMESTAMP'2026-11-01 00:00:00'))  (cost=9109 rows=37950) (actual time=0.0259..8
+                                        -> Covering index range scan on c using idx_comandas_estado_fecha over (estado = 'PAGADA' AND '2026-08-01 00:00:00' <= fecha_apertura < '2026-11-01 00:00:00')  (cost=9109 rows=37950) (actual
+                                    -> Covering index lookup on d using idx_detalle_comanda_cobertura (id_comanda=c.id_comanda)  (cost=1 rows=2.6) (actual time=0.00168..0.00218 rows=2.59 loops=19611)
+                                -> Single-row index lookup on p using PRIMARY (id_producto=d.id_producto)  (cost=0.25 rows=1) (actual time=466e-6..484e-6 rows=1 loops=50710)
+   r2_arqueo_de_caja                31.4 ms
+        -> Sort: dia, pg.metodo_pago, m.sector  (actual time=31.4..31.4 rows=372 loops=1)
+            -> Table scan on <temporary>  (actual time=30.9..30.9 rows=372 loops=1)
+                -> Aggregate using temporary table  (actual time=30.9..30.9 rows=372 loops=1)
+                    -> Nested loop inner join  (cost=8065 rows=7013) (actual time=0.725..24.3 rows=7013 loops=1)
+                        -> Nested loop inner join  (cost=5611 rows=7013) (actual time=0.719..19.6 rows=7013 loops=1)
+                            -> Index range scan on pg using idx_pagos_fecha_metodo over ('2026-10-01 00:00:00' <= fecha_pago < '2026-11-01 00:00:00'), with index condition: ((pg.fecha_pago >= TIMESTAMP'2026-10-01 00:00:00') and (p
+                            -> Single-row index lookup on c using PRIMARY (id_comanda=pg.id_comanda)  (cost=0.25 rows=1) (actual time=0.00118..0.0012 rows=1 loops=7013)
+                        -> Single-row index lookup on m using PRIMARY (id_mesa=c.id_mesa)  (cost=0.25 rows=1) (actual time=521e-6..540e-6 rows=1 loops=7013)
+   r3_ranking_mozos                100.0 ms
+        -> Sort: facturado DESC  (actual time=100..100 rows=6 loops=1)
+            -> Table scan on <temporary>  (actual time=100..100 rows=6 loops=1)
+                -> Aggregate using temporary table  (actual time=100..100 rows=6 loops=1)
+                    -> Nested loop inner join  (cost=50804 rows=37950) (actual time=0.0424..84.9 rows=19611 loops=1)
+                        -> Filter: ((c.estado = 'PAGADA') and (c.fecha_apertura >= TIMESTAMP'2026-08-01 00:00:00') and (c.fecha_apertura < TIMESTAMP'2026-11-01 00:00:00'))  (cost=9109 rows=37950) (actual time=0.0286..9.8 rows=1961
+                            -> Covering index range scan on c using idx_comandas_estado_fecha over (estado = 'PAGADA' AND '2026-08-01 00:00:00' <= fecha_apertura < '2026-11-01 00:00:00')  (cost=9109 rows=37950) (actual time=0.026.
+                        -> Covering index lookup on h using idx_historial_comanda_estado (id_comanda=c.id_comanda, estado_nuevo='LISTA_PARA_SERVIR')  (cost=0.999 rows=1) (actual time=0.00332..0.00366 rows=1 loops=19611)
+   r4_pedidos_festejo               99.4 ms
+        -> Sort: pedidos DESC  (actual time=99.4..99.4 rows=11 loops=1)
+            -> Table scan on <temporary>  (actual time=99.4..99.4 rows=11 loops=1)
+                -> Aggregate using temporary table  (actual time=99.4..99.4 rows=11 loops=1)
+                    -> Nested loop inner join  (cost=44573 rows=34451) (actual time=0.249..97.5 rows=3113 loops=1)
+                        -> Filter: (d.observaciones like '%cumpleaños%')  (cost=32515 rows=34451) (actual time=0.231..95 rows=3113 loops=1)
+                            -> Table scan on d  (cost=32515 rows=310093) (actual time=0.0972..74.7 rows=310440 loops=1)
+                        -> Single-row index lookup on p using PRIMARY (id_producto=d.id_producto)  (cost=0.25 rows=1) (actual time=663e-6..683e-6 rows=1 loops=3113)
+   r5_cierre_del_dia                20.1 ms
+        -> Table scan on <temporary>  (actual time=25.5..25.5 rows=4 loops=1)
+            -> Aggregate using temporary table  (actual time=25.5..25.5 rows=4 loops=1)
+                -> Filter: (cast(pg.fecha_pago as date) = '2026-10-15')  (cost=11192 rows=110396) (actual time=24.6..25.4 rows=266 loops=1)
+                    -> Covering index scan on pg using idx_pagos_fecha_metodo  (cost=11192 rows=110396) (actual time=0.0384..18.6 rows=115160 loops=1)
+   r6_mejores_clientes              48.6 ms
+        -> Limit: 10 row(s)  (actual time=50..50 rows=10 loops=1)
+            -> Sort: gastado DESC, limit input to 10 row(s) per chunk  (actual time=50..50 rows=10 loops=1)
+                -> Stream results  (cost=303 rows=2974) (actual time=0.0882..49.5 rows=3005 loops=1)
+                    -> Table scan on cl  (cost=303 rows=2974) (actual time=0.0518..0.544 rows=3005 loops=1)
+        -> Select #2 (subquery in projection; dependent)
+            -> Aggregate: count(0)  (cost=7.38 rows=1) (actual time=0.00734..0.00737 rows=1 loops=3005)
+                -> Filter: (year(c.fecha_apertura) = 2026)  (cost=4.22 rows=31.5) (actual time=0.00403..0.00677 rows=11.1 loops=3005)
+                    -> Covering index lookup on c using idx_comandas_cliente_estado_fecha (id_cliente=cl.id_cliente, estado='PAGADA')  (cost=4.22 rows=31.5) (actual time=0.00166..0.00549 rows=21 loops=3005)
+        -> Select #3 (subquery in projection; dependent)
+            -> Aggregate: sum(c.total)  (cost=7.38 rows=1) (actual time=0.00823..0.00825 rows=1 loops=3005)
+                -> Filter: (year(c.fecha_apertura) = 2026)  (cost=4.22 rows=31.5) (actual time=0.00436..0.00728 rows=11.1 loops=3005)
+                    -> Covering index lookup on c using idx_comandas_cliente_estado_fecha (id_cliente=cl.id_cliente, estado='PAGADA')  (cost=4.22 rows=31.5) (actual time=0.00182..0.00599 rows=21 loops=3005)
+
+>> 2D. Consultas reescritas (fase3/consultas/*_optimizada.sql)
+   r3_ranking_mozos                 64.2 ms
+        -> Sort: facturado DESC  (actual time=76..76 rows=6 loops=1)
+            -> Table scan on <temporary>  (actual time=76..76 rows=6 loops=1)
+                -> Aggregate using temporary table  (actual time=76..76 rows=6 loops=1)
+                    -> Nested loop inner join  (cost=50804 rows=37950) (actual time=0.0554..61.1 rows=19611 loops=1)
+                        -> Filter: ((c.estado = 'PAGADA') and (c.fecha_apertura >= TIMESTAMP'2026-08-01 00:00:00') and (c.fecha_apertura < TIMESTAMP'2026-11-01 00:00:00'))  (cost=9109 rows=37950) (actual time=0.038..9.5 rows=19611
+                            -> Covering index range scan on c using idx_comandas_estado_fecha over (estado = 'PAGADA' AND '2026-08-01 00:00:00' <= fecha_apertura < '2026-11-01 00:00:00')  (cost=9109 rows=37950) (actual time=0.0351
+                        -> Covering index lookup on h using idx_historial_comanda_estado (id_comanda=c.id_comanda, estado_nuevo='LISTA_PARA_SERVIR')  (cost=0.999 rows=1) (actual time=0.00215..0.00248 rows=1 loops=19611)
+   r4_pedidos_festejo               11.4 ms
+        -> Sort: pedidos DESC  (actual time=11.4..11.4 rows=11 loops=1)
+            -> Table scan on <temporary>  (actual time=11.4..11.4 rows=11 loops=1)
+                -> Aggregate using temporary table  (actual time=11.4..11.4 rows=11 loops=1)
+                    -> Nested loop inner join  (cost=1.45 rows=1) (actual time=0.312..10.1 rows=3113 loops=1)
+                        -> Filter: (match d.observaciones against ('cumpleaños' in boolean mode))  (cost=1.1 rows=1) (actual time=0.302..8.44 rows=3113 loops=1)
+                            -> Full-text index search on d using ft_detalle_observaciones (observaciones='cumpleaños')  (cost=1.1 rows=1) (actual time=0.301..8.25 rows=3113 loops=1)
+                        -> Single-row index lookup on p using PRIMARY (id_producto=d.id_producto)  (cost=0.35 rows=1) (actual time=402e-6..420e-6 rows=1 loops=3113)
+   r5_cierre_del_dia                 0.2 ms
+        -> Table scan on <temporary>  (actual time=0.203..0.203 rows=4 loops=1)
+            -> Aggregate using temporary table  (actual time=0.202..0.202 rows=4 loops=1)
+                -> Filter: ((pg.fecha_pago >= TIMESTAMP'2026-10-15 00:00:00') and (pg.fecha_pago < TIMESTAMP'2026-10-16 00:00:00'))  (cost=54.7 rows=266) (actual time=0.018..0.0815 rows=266 loops=1)
+                    -> Covering index range scan on pg using idx_pagos_fecha_metodo over ('2026-10-15 00:00:00' <= fecha_pago < '2026-10-16 00:00:00')  (cost=54.7 rows=266) (actual time=0.016..0.0595 rows=266 loops=1)
+   r6_mejores_clientes              39.3 ms
+        -> Limit: 10 row(s)  (actual time=42.7..42.7 rows=10 loops=1)
+            -> Sort: gastado DESC, limit input to 10 row(s) per chunk  (actual time=42.7..42.7 rows=10 loops=1)
+                -> Table scan on <temporary>  (actual time=42.1..42.5 rows=2373 loops=1)
+                    -> Aggregate using temporary table  (actual time=42.1..42.1 rows=2373 loops=1)
+                        -> Nested loop inner join  (cost=12867 rows=49376) (actual time=0.106..25.6 rows=33336 loops=1)
+                            -> Table scan on cl  (cost=303 rows=2974) (actual time=0.0821..0.662 rows=3005 loops=1)
+                            -> Filter: ((c.fecha_apertura >= TIMESTAMP'2026-01-01 00:00:00') and (c.fecha_apertura < TIMESTAMP'2027-01-01 00:00:00'))  (cost=1.07 rows=16.6) (actual time=0.00411..0.00772 rows=11.1 loops=3005)
+                                -> Covering index lookup on c using idx_comandas_cliente_estado_fecha (id_cliente=cl.id_cliente, estado='PAGADA')  (cost=1.07 rows=31.5) (actual time=0.00158..0.00617 rows=21 loops=3005)
+
+>> Resumen de tiempos (ms, mejor de 3)
+   Reporte                     A inicial  B +estadíst. C +índices  D +reescrit.    Mejora
+   r1_ventas_por_categoria         828.0          200.0      138.0             -      6.0x
+   r2_arqueo_de_caja                47.9           42.2       31.4             -      1.5x
+   r3_ranking_mozos                305.0          226.0      100.0          64.2      4.8x
+   r4_pedidos_festejo              364.0           72.4       99.4          11.4     31.9x
+   r5_cierre_del_dia                24.7           20.4       20.1           0.2    123.5x
+   r6_mejores_clientes             123.0          130.0       48.6          39.3      3.1x
+
+>> 3. Costo de los índices sobre la tasa de inserción (fase3/04_benchmark_insercion.sql, ~3 min)
+   +----------------------------------+------------------+--------+----------+-------------------+-------------------+-------------+
+   | prueba                           | variante         | filas  | segundos | filas_por_segundo | microseg_por_fila | vs_original |
+   +----------------------------------+------------------+--------+----------+-------------------+-------------------+-------------+
+   | 1. carga masiva (INSERT SELECT)  | a_original       | 310440 |    6.655 |             46648 |              21.4 | +0.0 %      |
+   | 1. carga masiva (INSERT SELECT)  | b_fase3          | 310440 |    7.214 |             43033 |              23.2 | +8.4 %      |
+   | 1. carga masiva (INSERT SELECT)  | c_fase3_fulltext | 310440 |    9.557 |             32483 |              30.8 | +43.6 %     |
+   | 2. operación (INSERT de 1 fila)  | a_original       |  20000 |    1.265 |             15810 |              63.2 | +0.0 %      |
+   | 2. operación (INSERT de 1 fila)  | b_fase3          |  20000 |    1.340 |             14925 |                67 | +5.9 %      |
+   | 2. operación (INSERT de 1 fila)  | c_fase3_fulltext |  20000 |    1.325 |             15094 |              66.2 | +4.7 %      |
+   +----------------------------------+------------------+--------+----------+-------------------+-------------------+-------------+
+   +------------------------------+---------+----------+----------+
+   | Table                        | Op      | Msg_type | Msg_text |
+   +------------------------------+---------+----------+----------+
+   | fase3_bench.a_original       | analyze | status   | OK       |
+   | fase3_bench.b_fase3          | analyze | status   | OK       |
+   | fase3_bench.c_fase3_fulltext | analyze | status   | OK       |
+   +------------------------------+---------+----------+----------+
+   +------------------+----------+------------------------+
+   | variante         | datos_mb | indices_secundarios_mb |
+   +------------------+----------+------------------------+
+   | a_original       |     19.5 |                   10.0 |
+   | b_fase3          |     19.5 |                   18.1 |
+   | c_fase3_fulltext |     22.5 |                   23.6 |
+   +------------------+----------+------------------------+
+
+>> 4. Data warehouse en estrella con tablas de hechos particionadas (05)
+   +--------------------+-------------+
+   | tabla              | particiones |
+   +--------------------+-------------+
+   | hechos_ventas      |          25 |
+   | hechos_preparacion |           4 |
+   +--------------------+-------------+
+
+>> 5. Fuentes heterogéneas: planilla Excel (CSV) y log del KDS (06)
+   [OK] planilla copiada a /var/lib/mysql-files del Nodo 1 (268 líneas, Windows-1252)
+   [OK] log del KDS generado: 50834 líneas (copia en fase3/fuentes/kds_eventos.log)
+   Muestra del log:
+      2026-08-01 12:03:30 [KDS] estacion=BARRA comanda=1148389 producto=10 cantidad=2 evento=FIN_COCCION duracion_seg=90
+      2026-08-01 23:00:30 [SYS] impresora=IMP-01 estado=SIN_PAPEL
+      2026-08-01 23:24:25 [KDS] estacion=COCINA_CALIENTE comanda=1089067 producto=1 cantidad=4 evento=FIN_COCCION duracion_seg=ERR
+
+>> 6. ETL de las tres fuentes (07 y 08)
+   +--------------------+--------------+----------------+------------------+----------+---------------------+
+   | proceso            | filas_leidas | filas_cargadas | filas_rechazadas | segundos | marca_agua          |
+   +--------------------+--------------+----------------+------------------+----------+---------------------+
+   | dimensiones        |         NULL |           NULL |             NULL |     0.18 | NULL                |
+   | costos_proveedores |          267 |            263 |                4 |     0.03 | NULL                |
+   | log_kds            |        50834 |          50562 |              272 |    11.73 | 2026-11-01 00:06:57 |
+   | hechos_ventas      |         NULL |         297885 |                0 |    43.12 | 2026-11-13 16:29:15 |
+   +--------------------+--------------+----------------+------------------+----------+---------------------+
+   +-----------------+----------------------------------------+-------+------------------------------------------------------------------------------------------------------------------------------+
+   | fuente          | motivo                                 | filas | ejemplo                                                                                                                      |
+   +-----------------+----------------------------------------+-------+------------------------------------------------------------------------------------------------------------------------------+
+   | log_kds         | Duración inválida (reinicio del KDS)   |   148 | 2026-08-01 23:24:25 [KDS] estacion=COCINA_CALIENTE comanda=1089067 producto=1 cantidad=4 evento=FIN_COCCION duracion_seg=ERR |
+   | log_kds         | Evento de sistema, no de cocina        |   124 | 2026-08-01 23:00:30 [SYS] impresora=IMP-01 estado=SIN_PAPEL                                                                  |
+   | planilla_costos | Línea vacía                            |     1 |                                                                                                                              |
+   | planilla_costos | Costo vacío o con formato inválido     |     1 | Flan Casero con Dulce de Leche y Crema;02/2026;;Lácteos del Paraná                                                           |
+   | planilla_costos | Producto que no está en el menú        |     1 | Langostinos Patagónicos;12/2025;14.200,00;Pesquera del Sur                                                                   |
+   | planilla_costos | Fila duplicada (mismo producto y mes)  |     1 | Sorrentinos Caseros de Salmón y Ricota;06/2026;4.936,68;Pastas Doña Rosa                                                     |
+   +-----------------+----------------------------------------+-------+------------------------------------------------------------------------------------------------------------------------------+
+   +----------------------------+---------+----------------+-------------------+
+   | nombre                     | periodo | costo_unitario | proveedor         |
+   +----------------------------+---------+----------------+-------------------+
+   | Bife de Chorizo Angus 400g | 2025-06 |        6422.14 | Cabaña Las Lilas  |
+   | Vino Malbec Reserva 750ml  | 2025-10 |        6339.44 | Bodega Mendocina  |
+   +----------------------------+---------+----------------+-------------------+
+   +--------------------+--------+-----------+
+   | tabla              | filas  | sin_costo |
+   +--------------------+--------+-----------+
+   | hechos_ventas      | 297885 |         0 |
+   | hechos_preparacion |  50562 |      NULL |
+   +--------------------+--------+-----------+
+
+>> 7. Vista materializada y política de refresco (09)
+   +-------------------------+
+   | planificador_de_eventos |
+   +-------------------------+
+   | ON                      |
+   +-------------------------+
+   +---------------------+---------+------+--------+---------------------------------------+
+   | evento              | estado  | cada | unidad | accion                                |
+   +---------------------+---------+------+--------+---------------------------------------+
+   | ev_dw_actualizacion | ENABLED | 15   | MINUTE | CALL dw_ciclo_actualizacion('EVENTO') |
+   +---------------------+---------+------+--------+---------------------------------------+
+   +----------+---------------+----------+-------+----------+
+   | modo     | origen        | periodos | filas | segundos |
+   +----------+---------------+----------+-------+----------+
+   | COMPLETO | CARGA_INICIAL |       36 |   531 |    10.87 |
+   +----------+---------------+----------+-------+----------+
+
+>> 8. Mantenimiento automático de particiones (10)
+   +---------------------+----------------+
+   | particiones_creadas | cubierto_hasta |
+   +---------------------+----------------+
+   |                   2 | 2027-02        |
+   +---------------------+----------------+
+   +-----------+-----------+-------------+
+   | particion | menor_que | filas_aprox |
+   +-----------+-----------+-------------+
+   | p2025_01  | 20250201  |        3441 |
+   | p2025_02  | 20250301  |        3186 |
+   | p2025_03  | 20250401  |        8976 |
+   | p2025_04  | 20250501  |        9318 |
+   | p2025_05  | 20250601  |        4706 |
+   | p2025_06  | 20250701  |        3655 |
+   | p2025_07  | 20250801  |        4298 |
+   | p2025_08  | 20250901  |        3806 |
+   | p2025_09  | 20251001  |        4278 |
+   | p2025_10  | 20251101  |        2767 |
+   | p2025_11  | 20251201  |        4063 |
+   | p2025_12  | 20260101  |        5508 |
+   | p2026_01  | 20260201  |        5801 |
+   | p2026_02  | 20260301  |        4153 |
+   | p2026_03  | 20260401  |        4452 |
+   | p2026_04  | 20260501  |        4405 |
+   | p2026_05  | 20260601  |        5628 |
+   | p2026_06  | 20260701  |        4972 |
+   | p2026_07  | 20260801  |        5655 |
+   | p2026_08  | 20260901  |        4693 |
+   | p2026_09  | 20261001  |        8369 |
+   | p2026_10  | 20261101  |        9442 |
+   | p2026_11  | 20261201  |           0 |
+   | p2026_12  | 20270101  |           0 |
+   | p2027_01  | 20270201  |           0 |
+   | p2027_02  | 20270301  |           0 |
+   | p_futuro  | MAXVALUE  |           0 |
+   +-----------+-----------+-------------+
+
+>> 9. Demostración de la optimización física (11)
+   +----------------------------------------------------------+
+   | consulta                                                 |
+   +----------------------------------------------------------+
+   | A1. Desde la base operativa (4 tablas, 120.000 comandas) |
+   +----------------------------------------------------------+
+   +-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+   | EXPLAIN                                                                                                                                                                                                                             
+   +-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+   | -> Table scan on <temporary>  (actual time=816..816 rows=123 loops=1)
+       -> Aggregate using temporary table  (actual time=816..816 rows=123 loops=1)
+           -> Nested loop inner join  (cost=304786 rows=172316) (actual time=2.62..637 rows=156763 loops=1)
+               -> Nested loop inner join  (cost=115239 rows=172316) (actual time=2.3..531 rows=156763 loops=1)
+                   -> Nested loop inner join  (cost=31495 rows=66228) (actual time=1.71..280 rows=60601 loops=1)
+                       -> Table scan on m  (cost=2 rows=10) (actual time=0.282..0.299 rows=10 loops=1)
+                       -> Filter: ((restaurante_db.c.estado = 'PAGADA') and (restaurante_db.c.fecha_apertura >= TIMESTAMP'2026-01-01 00:00:00') and (restaurante_db.c.fecha_apertura < TIMESTAMP'2027-01-01 00:00:00'))  (cost=1891 rows=
+                           -> Index lookup on c using fk_comanda_mesa (id_mesa=restaurante_db.m.id_mesa)  (cost=1891 rows=13246) (actual time=0.398..25.6 rows=12001 loops=10)
+                   -> Covering index lookup on d using idx_detalle_comanda_cobertura (id_comanda=restaurante_db.c.id_comanda)  (cost=1 rows=2.6) (actual time=0.00334..0.00393 rows=2.59 loops=60601)
+               -> Single-row index lookup on p using PRIMARY (id_producto=restaurante_db.d.id_producto)  (cost=1 rows=1) (actual time=533e-6..553e-6 rows=1 loops=156763)
+    |
+   +-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+   +-----------------------------------------------------------------------+
+   | consulta                                                              |
+   +-----------------------------------------------------------------------+
+   | A2. Desde el esquema en estrella (hechos particionados + dimensiones) |
+   +-----------------------------------------------------------------------+
+   +-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+   | EXPLAIN                                                                                                                                                                                                                             
+   +-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+   | -> Table scan on <temporary>  (actual time=467..467 rows=123 loops=1)
+       -> Aggregate using temporary table  (actual time=467..467 rows=123 loops=1)
+           -> Nested loop inner join  (cost=6489 rows=71.1) (actual time=0.516..231 rows=156763 loops=1)
+               -> Nested loop inner join  (cost=6226 rows=71.1) (actual time=0.509..171 rows=156763 loops=1)
+                   -> Inner hash join (h.id_mesa = me.id_mesa)  (cost=6059 rows=71.1) (actual time=0.498..70.1 rows=156763 loops=1)
+                       -> Filter: (h.fecha_key between 20260101 and 20261231)  (cost=548 rows=640) (actual time=0.473..48.8 rows=156763 loops=1)
+                           -> Table scan on h  (cost=548 rows=57570) (actual time=0.471..38.3 rows=156763 loops=1)
+                       -> Hash
+                           -> Table scan on me  (cost=1.25 rows=10) (actual time=0.0109..0.0135 rows=10 loops=1)
+                   -> Single-row index lookup on pr using PRIMARY (id_producto=h.id_producto)  (cost=0.025 rows=1) (actual time=505e-6..523e-6 rows=1 loops=156763)
+               -> Single-row index lookup on t using PRIMARY (fecha_key=h.fecha_key)  (cost=0.04 rows=1) (actual time=248e-6..267e-6 rows=1 loops=156763)
+    |
+   +-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+   +----------------------------------+
+   | consulta                         |
+   +----------------------------------+
+   | A3. Desde la vista materializada |
+   +----------------------------------+
+   +-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+   | EXPLAIN                                                                                                                                                                                                                             
+   +-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+   | -> Group aggregate: sum(mv_ventas_mensuales.importe)  (cost=73.3 rows=243) (actual time=0.0736..0.627 rows=123 loops=1)
+       -> Filter: (mv_ventas_mensuales.periodo between '2026-01' and '2026-12')  (cost=49 rows=243) (actual time=0.0492..0.485 rows=243 loops=1)
+           -> Index range scan on mv_ventas_mensuales using PRIMARY over ('2026-01' <= periodo <= '2026-12')  (cost=49 rows=243) (actual time=0.0476..0.401 rows=243 loops=1)
+    |
+   +-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+   +----------------------+----------------+---------------------------+
+   | total_base_operativa | total_estrella | total_vista_materializada |
+   +----------------------+----------------+---------------------------+
+   |        2706795996.73 |  2706795996.73 |             2706795996.73 |
+   +----------------------+----------------+---------------------------+
+   +--------------------------------------------------------------+
+   | paso                                                         |
+   +--------------------------------------------------------------+
+   | B1. Se cobra una comanda nueva en el Salón (base operativa)  |
+   +--------------------------------------------------------------+
+   +---------------+---------+---------------------+-----------------------------------------------+
+   | comanda_nueva | periodo | importe_en_la_vista | estado                                        |
+   +---------------+---------+---------------------+-----------------------------------------------+
+   |       1240001 | 2026-11 |            63400.00 | la vista todavía no incluye la comanda nueva  |
+   +---------------+---------+---------------------+-----------------------------------------------+
+   +-------------------------------------------------------------------------+
+   | paso                                                                    |
+   +-------------------------------------------------------------------------+
+   | B2. Refresco manual: ETL incremental + refresco incremental de la vista |
+   +-------------------------------------------------------------------------+
+   +---------------------+--------------------------------------+----------------------------------------+
+   | importe_en_la_vista | diferencia                           | estado                                 |
+   +---------------------+--------------------------------------+----------------------------------------+
+   |           130300.00 | 66900.000000000000000000000000000000 | la vista incluye la comanda de $66.900 |
+   +---------------------+--------------------------------------+----------------------------------------+
+   +----------------------------------------------------------------------------------+
+   | paso                                                                             |
+   +----------------------------------------------------------------------------------+
+   | B3. El EVENT refresca solo: se acelera a cada 5 s, se esperan 12 s y se restaura |
+   +----------------------------------------------------------------------------------+
+   +--------------------------------+
+   | refrescos_hechos_por_el_evento |
+   +--------------------------------+
+   |                              3 |
+   +--------------------------------+
+   +-------------+---------------+--------------------+-------+----------+
+   | modo        | origen        | meses_recalculados | filas | segundos |
+   +-------------+---------------+--------------------+-------+----------+
+   | COMPLETO    | CARGA_INICIAL |                 36 |   531 |    10.87 |
+   | INCREMENTAL | MANUAL        |                  1 |     5 |     0.59 |
+   | INCREMENTAL | EVENTO        |                  0 |     0 |     0.01 |
+   | INCREMENTAL | EVENTO        |                  0 |     0 |     0.01 |
+   | INCREMENTAL | EVENTO        |                  0 |     0 |     0.01 |
+   +-------------+---------------+--------------------+-------+----------+
+   +--------------------------------------------------------------------+
+   | consulta                                                           |
+   +--------------------------------------------------------------------+
+   | C1. Un mes: EXPLAIN muestra que solo se lee la partición p2026_09  |
+   +--------------------------------------------------------------------+
+   +----+-------------+---------------+------------+------+-------------------------+------+---------+------+------+----------+------------------------------+
+   | id | select_type | table         | partitions | type | possible_keys           | key  | key_len | ref  | rows | filtered | Extra                        |
+   +----+-------------+---------------+------------+------+-------------------------+------+---------+------+------+----------+------------------------------+
+   |  1 | SIMPLE      | hechos_ventas | p2026_09   | ALL  | idx_hv_comanda_producto | NULL | NULL    | NULL | 8369 |    11.11 | Using where; Using temporary |
+   +----+-------------+---------------+------------+------+-------------------------+------+---------+------+------+----------+------------------------------+
+   +--------------------------------+---------+----------+----------+
+   | Table                          | Op      | Msg_type | Msg_text |
+   +--------------------------------+---------+----------+----------+
+   | fase3_bench.hv_sin_particionar | analyze | status   | OK       |
+   | fase3_bench.hv_particionada    | analyze | status   | OK       |
+   +--------------------------------+---------+----------+----------+
+   +----------------------------------------------------------------+
+   | consulta                                                       |
+   +----------------------------------------------------------------+
+   | C2. Ventas de septiembre 2026 por producto: tabla particionada |
+   +----------------------------------------------------------------+
+   +-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+   | EXPLAIN                                                                                                                                                                                                                             
+   +-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+   | -> Table scan on <temporary>  (actual time=6.98..6.98 rows=12 loops=1)
+       -> Aggregate using temporary table  (actual time=6.98..6.98 rows=12 loops=1)
+           -> Filter: (fase3_bench.hv_particionada.fecha_key between 20260901 and 20260930)  (cost=1675 rows=1834) (actual time=0.169..3.25 rows=16456 loops=1)
+               -> Table scan on hv_particionada  (cost=1675 rows=16512) (actual time=0.168..2.5 rows=16456 loops=1)
+    |
+   +-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+   +------------------------------------------------------+
+   | consulta                                             |
+   +------------------------------------------------------+
+   | C3. La misma consulta sobre la tabla SIN particionar |
+   +------------------------------------------------------+
+   +-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+   | EXPLAIN                                                                                                                                                                                                                             
+   +-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+   | -> Table scan on <temporary>  (actual time=253..253 rows=12 loops=1)
+       -> Aggregate using temporary table  (actual time=253..253 rows=12 loops=1)
+           -> Filter: (fase3_bench.hv_sin_particionar.fecha_key between 20260901 and 20260930)  (cost=31847 rows=32987) (actual time=2.01..248 rows=16456 loops=1)
+               -> Table scan on hv_sin_particionar  (cost=31847 rows=296917) (actual time=2..238 rows=297887 loops=1)
+    |
+   +-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+   +------------------------------------------------------------------+
+   | consulta                                                         |
+   +------------------------------------------------------------------+
+   | D1. Tiempos de la parrilla: solo se lee la partición p_parrilla  |
+   +------------------------------------------------------------------+
+   +----+-------------+--------------------+------------+------+---------------+------+---------+------+-------+----------+------------------------------+
+   | id | select_type | table              | partitions | type | possible_keys | key  | key_len | ref  | rows  | filtered | Extra                        |
+   +----+-------------+--------------------+------------+------+---------------+------+---------+------+-------+----------+------------------------------+
+   |  1 | SIMPLE      | hechos_preparacion | p_parrilla | ALL  | NULL          | NULL | NULL    | NULL | 10088 |    10.00 | Using where; Using temporary |
+   +----+-------------+--------------------+------------+------+---------------+------+---------+------+-------+----------+------------------------------+
+   +--------------+-------------------+-------------+
+   | particion    | valores           | filas_aprox |
+   +--------------+-------------------+-------------+
+   | p_parrilla   | 'PARRILLA'        |       10088 |
+   | p_cocina     | 'COCINA_CALIENTE' |       14784 |
+   | p_pasteleria | 'PASTELERIA'      |        6148 |
+   | p_barra      | 'BARRA'           |       19656 |
+   +--------------+-------------------+-------------+
+   +------------------------------------------------------+
+   | operacion                                            |
+   +------------------------------------------------------+
+   | E1. DELETE fila por fila en la tabla sin particionar |
+   +------------------------------------------------------+
+   +----------------+--------------+
+   | filas_borradas | milisegundos |
+   +----------------+--------------+
+   |          63243 |       6426.4 |
+   +----------------+--------------+
+   +------------------------------------------------------------+
+   | operacion                                                  |
+   +------------------------------------------------------------+
+   | E2. DROP PARTITION de los 6 meses en la tabla particionada |
+   +------------------------------------------------------------+
+   +--------------+
+   | milisegundos |
+   +--------------+
+   |       2661.4 |
+   +--------------+
+   +---------------------------------+------------------------------+
+   | filas_restantes_sin_particionar | filas_restantes_particionada |
+   +---------------------------------+------------------------------+
+   |                          234644 |                       234644 |
+   +---------------------------------+------------------------------+
+
+>> 10. Descubrimiento de conocimiento: reglas de asociación, RFM y tiempos de cocina (12)
+   +-----------------+--------------------+--------------------+
+   | segundos_reglas | tickets_analizados | reglas_encontradas |
+   +-----------------+--------------------+--------------------+
+   |             9.6 |             115160 |                 46 |
+   +-----------------+--------------------+--------------------+
+   +-------------------------------------------------------------------------+
+   | resultado                                                               |
+   +-------------------------------------------------------------------------+
+   | 1. Reglas de asociación con mayor lift (quien pide A, también pide B)   |
+   +-------------------------------------------------------------------------+
+   +-----------------------------------------+-----------------------------------------+---------+-----------+-------+
+   | antecedente                             | consecuente                             | soporte | confianza | lift  |
+   +-----------------------------------------+-----------------------------------------+---------+-----------+-------+
+   | Empanada Criolla Cortada a Cuchillo     | Cerveza Artesanal IPA 500ml             | 15.0 %  | 60.4 %    | 4.028 |
+   | Cerveza Artesanal IPA 500ml             | Empanada Criolla Cortada a Cuchillo     | 15.0 %  | 100.0 %   | 4.028 |
+   | Ojo de Bife con Papas Rústicas          | Vino Malbec Reserva 750ml               | 10.7 %  | 70.1 %    | 3.329 |
+   | Vino Malbec Reserva 750ml               | Ojo de Bife con Papas Rústicas          | 10.7 %  | 50.7 %    | 3.329 |
+   | Vino Malbec Reserva 750ml               | Bife de Chorizo Angus 400g              | 10.4 %  | 49.3 %    | 3.313 |
+   | Sorrentinos Caseros de Salmón y Ricota  | Volcán de Chocolate con Helado          | 13.9 %  | 55.5 %    | 3.313 |
+   | Volcán de Chocolate con Helado          | Sorrentinos Caseros de Salmón y Ricota  | 13.9 %  | 82.7 %    | 3.313 |
+   | Bife de Chorizo Angus 400g              | Vino Malbec Reserva 750ml               | 10.4 %  | 69.7 %    | 3.313 |
+   | Sorrentinos Caseros de Salmón y Ricota  | Agua Mineral sin Gas 500ml              | 15.0 %  | 60.0 %    | 2.826 |
+   | Agua Mineral sin Gas 500ml              | Sorrentinos Caseros de Salmón y Ricota  | 15.0 %  | 70.6 %    | 2.826 |
+   +-----------------------------------------+-----------------------------------------+---------+-----------+-------+
+   +-------------------------------------------------------------------+
+   | resultado                                                         |
+   +-------------------------------------------------------------------+
+   | 1b. Pares que se evitan (lift < 1): no conviene ofrecerlos juntos |
+   +-------------------------------------------------------------------+
+   +--------------------------------------+-----------------------------------------+-----------+-------+
+   | antecedente                          | consecuente                             | confianza | lift  |
+   +--------------------------------------+-----------------------------------------+-----------+-------+
+   | Empanada Criolla Cortada a Cuchillo  | Gaseosa Cola 500ml                      | 27.5 %    | 0.643 |
+   | Provoleta a la Parrilla con Orégano  | Gaseosa Cola 500ml                      | 28.5 %    | 0.667 |
+   | Ojo de Bife con Papas Rústicas       | Gaseosa Cola 500ml                      | 30.0 %    | 0.701 |
+   | Bife de Chorizo Angus 400g           | Gaseosa Cola 500ml                      | 30.3 %    | 0.708 |
+   | Empanada Criolla Cortada a Cuchillo  | Sorrentinos Caseros de Salmón y Ricota  | 20.1 %    | 0.803 |
+   +--------------------------------------+-----------------------------------------+-----------+-------+
+   +--------------------------------------------+
+   | resultado                                  |
+   +--------------------------------------------+
+   | 2. Segmentos RFM de clientes al 31/10/2026 |
+   +--------------------------------------------+
+   +-------------+----------+------------------------+------------------+----------------+-------------------------+
+   | segmento    | clientes | recencia_promedio_dias | visitas_promedio | gasto_promedio | participacion_en_ventas |
+   +-------------+----------+------------------------+------------------+----------------+-------------------------+
+   | Campeones   |      568 |                      4 |             50.6 |        2009327 | 45.6 %                  |
+   | Leales      |      503 |                     12 |             28.4 |        1133451 | 22.8 %                  |
+   | En riesgo   |      376 |                     42 |             26.9 |        1052039 | 15.8 %                  |
+   | Dormidos    |      590 |                    111 |              9.2 |         356210 | 8.4 %                   |
+   | Recientes   |      232 |                      5 |             12.6 |         496856 | 4.6 %                   |
+   | Ocasionales |      144 |                     16 |             12.1 |         486205 | 2.8 %                   |
+   +-------------+----------+------------------------+------------------+----------------+-------------------------+
+   +--------------------------------------------------------------------------------+
+   | resultado                                                                      |
+   +--------------------------------------------------------------------------------+
+   | 3. Tiempo de preparación (minutos) por estación y hora, desde el log del KDS   |
+   +--------------------------------------------------------------------------------+
+   +-----------------+------------------+---------+--------------+---------+-------------------+
+   | estacion        | almuerzo_12_a_14 | cena_20 | pico_21_a_22 | cena_23 | demora_en_el_pico |
+   +-----------------+------------------+---------+--------------+---------+-------------------+
+   | PARRILLA        |             16.2 |    15.1 |         20.2 |    17.9 | +24 %             |
+   | COCINA_CALIENTE |             12.7 |    12.0 |         16.1 |    13.6 | +27 %             |
+   | PASTELERIA      |              4.3 |     4.1 |          5.6 |     4.4 | +33 %             |
+   | BARRA           |              1.4 |     1.3 |          1.8 |     1.4 | +35 %             |
+   +-----------------+------------------+---------+--------------+---------+-------------------+
+   +----------------------------------------------------------------------------------+
+   | resultado                                                                        |
+   +----------------------------------------------------------------------------------+
+   | 3b. Efecto del punto de cocción en la parrilla (cruce log KDS + base operativa)  |
+   +----------------------------------------------------------------------------------+
+   +---------------+--------+------------------+
+   | punto_coccion | platos | minutos_promedio |
+   +---------------+--------+------------------+
+   | JUGOSO        |   1434 |             15.1 |
+   | A_PUNTO       |   2994 |             17.9 |
+   | COCIDO        |   1502 |             22.1 |
+   +---------------+--------+------------------+
+
+>> 11. Consultas OLAP sobre el cubo (13)
+   +---------------+----------------+---------------------+---------------+--------+
+   | anio          | trimestre      | categoria           | importe       | margen |
+   +---------------+----------------+---------------------+---------------+--------+
+   | 2025          | T1             | BEBIDA              | 70.498.602    | 58.7 % |
+   | 2025          | T1             | ENTRADA             | 42.713.456    | 68.2 % |
+   | 2025          | T1             | PLATO_PRINCIPAL     | 218.986.907   | 63.9 % |
+   | 2025          | T1             | POSTRE              | 14.612.489    | 74.9 % |
+   | 2025          | T1             | Total del trimestre | 346.811.454   | 63.8 % |
+   | 2025          | T2             | BEBIDA              | 84.129.093    | 59.2 % |
+   | 2025          | T2             | ENTRADA             | 52.041.881    | 68.8 % |
+   | 2025          | T2             | PLATO_PRINCIPAL     | 261.721.413   | 63.7 % |
+   | 2025          | T2             | POSTRE              | 17.175.069    | 75.3 % |
+   | 2025          | T2             | Total del trimestre | 415.067.456   | 63.9 % |
+   | 2025          | T3             | BEBIDA              | 103.518.604   | 58.9 % |
+   | 2025          | T3             | ENTRADA             | 65.048.199    | 68.3 % |
+   | 2025          | T3             | PLATO_PRINCIPAL     | 318.230.667   | 64.1 % |
+   | 2025          | T3             | POSTRE              | 21.157.862    | 74.6 % |
+   | 2025          | T3             | Total del trimestre | 507.955.333   | 64.0 % |
+   | 2025          | T4             | BEBIDA              | 120.068.671   | 58.8 % |
+   | 2025          | T4             | ENTRADA             | 73.655.491    | 68.6 % |
+   | 2025          | T4             | PLATO_PRINCIPAL     | 366.728.102   | 63.7 % |
+   | 2025          | T4             | POSTRE              | 24.249.778    | 75.2 % |
+   | 2025          | T4             | Total del trimestre | 584.702.042   | 63.8 % |
+   | 2025          | Total del año  |                     | 1.854.536.285 | 63.9 % |
+   | 2026          | T1             | BEBIDA              | 140.311.065   | 59.5 % |
+   | 2026          | T1             | ENTRADA             | 85.170.278    | 68.5 % |
+   | 2026          | T1             | PLATO_PRINCIPAL     | 426.026.301   | 63.7 % |
+   | 2026          | T1             | POSTRE              | 28.268.952    | 74.9 % |
+   | 2026          | T1             | Total del trimestre | 679.776.595   | 63.9 % |
+   | 2026          | T2             | BEBIDA              | 161.317.555   | 58.6 % |
+   | 2026          | T2             | ENTRADA             | 99.353.760    | 68.2 % |
+   | 2026          | T2             | PLATO_PRINCIPAL     | 496.542.951   | 64.0 % |
+   | 2026          | T2             | POSTRE              | 33.180.835    | 74.9 % |
+   | 2026          | T2             | Total del trimestre | 790.395.101   | 63.9 % |
+   | 2026          | T3             | BEBIDA              | 180.446.435   | 59.1 % |
+   | 2026          | T3             | ENTRADA             | 111.514.655   | 68.9 % |
+   | 2026          | T3             | PLATO_PRINCIPAL     | 557.214.581   | 63.6 % |
+   | 2026          | T3             | POSTRE              | 36.901.029    | 75.3 % |
+   | 2026          | T3             | Total del trimestre | 886.076.700   | 63.8 % |
+   | 2026          | T4             | BEBIDA              | 71.904.900    | 59.6 % |
+   | 2026          | T4             | ENTRADA             | 44.879.200    | 68.8 % |
+   | 2026          | T4             | PLATO_PRINCIPAL     | 219.376.900   | 63.8 % |
+   | 2026          | T4             | POSTRE              | 14.323.200    | 74.4 % |
+   | 2026          | T4             | Total del trimestre | 350.484.200   | 64.0 % |
+   | 2026          | Total del año  |                     | 2.706.732.597 | 63.9 % |
+   | TOTAL GENERAL |                |                     | 4.561.268.881 | 63.9 % |
+   +---------------+----------------+---------------------+---------------+--------+
+   +-------------------+--------------+-------------+-------------+-------------+-------------+---------------+
+   | sector            | turno        | efectivo    | debito      | credito     | qr          | total         |
+   +-------------------+--------------+-------------+-------------+-------------+-------------+---------------+
+   | Barra / Cocktails | ALMUERZO     | 42.661.968  | 64.665.573  | 66.875.994  | 41.989.293  | 216.192.828   |
+   | Barra / Cocktails | CENA         | 63.521.460  | 100.350.639 | 99.145.260  | 66.752.984  | 329.770.343   |
+   | Barra / Cocktails | Total sector | 106.183.428 | 165.016.212 | 166.021.254 | 108.742.277 | 545.963.171   |
+   | Salón Principal   | ALMUERZO     | 111.966.983 | 159.486.168 | 166.526.185 | 106.715.218 | 544.694.554   |
+   | Salón Principal   | CENA         | 160.945.828 | 243.881.822 | 243.815.641 | 164.470.175 | 813.113.466   |
+   | Salón Principal   | Total sector | 272.912.811 | 403.367.991 | 410.341.826 | 271.185.393 | 1.357.808.020 |
+   | Terraza Exterior  | ALMUERZO     | 67.364.034  | 97.012.203  | 96.478.433  | 65.319.062  | 326.173.732   |
+   | Terraza Exterior  | CENA         | 96.345.586  | 142.639.274 | 142.921.641 | 94.881.173  | 476.787.673   |
+   | Terraza Exterior  | Total sector | 163.709.620 | 239.651.477 | 239.400.074 | 160.200.235 | 802.961.405   |
+   | TOTAL             |              | 542.805.859 | 808.035.680 | 815.763.154 | 540.127.904 | 2.706.732.597 |
+   +-------------------+--------------+-------------+-------------+-------------+-------------+---------------+
+   +---------+-------------+----------------+----------------------+
+   | periodo | importe     | mismo_mes_2025 | variacion_interanual |
+   +---------+-------------+----------------+----------------------+
+   | 2026-01 | 233.545.163 | 117.814.941    | 98.2 %               |
+   | 2026-02 | 216.448.853 | 108.923.206    | 98.7 %               |
+   | 2026-03 | 229.782.579 | 120.073.307    | 91.4 %               |
+   | 2026-04 | 230.934.614 | 123.305.778    | 87.3 %               |
+   | 2026-05 | 275.810.233 | 140.532.378    | 96.3 %               |
+   | 2026-06 | 283.650.255 | 151.229.301    | 87.6 %               |
+   | 2026-07 | 285.256.831 | 169.255.912    | 68.5 %               |
+   | 2026-08 | 292.977.074 | 175.120.642    | 67.3 %               |
+   | 2026-09 | 307.842.795 | 163.578.779    | 88.2 %               |
+   | 2026-10 | 350.484.200 | 180.480.992    | 94.2 %               |
+   +---------+-------------+----------------+----------------------+
+
+>> 12. Tablero dimensional
+   [OK] tablero generado desde restaurante_nodo1_salon: fase3/tablero/tablero.html (25869 bytes)
+
+>> 13. Replicación del data warehouse: comparación de cada tabla en ambos nodos
+   costos_producto_mes             251177827      251177827   IGUAL
+   dim_cliente                      18581297       18581297   IGUAL
+   dim_medio_pago                 3554617318     3554617318   IGUAL
+   dim_mesa                       4278659264     4278659264   IGUAL
+   dim_mozo                       3775967242     3775967242   IGUAL
+   dim_producto                   3748464689     3748464689   IGUAL
+   dim_tiempo                     3997472266     3997472266   IGUAL
+   dim_turno                       509415855      509415855   IGUAL
+   etl_control                    1100323552     1100323552   IGUAL
+   etl_rechazos                   2757069975     2757069975   IGUAL
+   hechos_preparacion             2099700160     2099700160   IGUAL
+   hechos_ventas                  1881978154     1881978154   IGUAL
+   kdd_reglas_asociacion          2479549466     2479549466   IGUAL
+   kdd_segmentos_rfm              2423685890     2423685890   IGUAL
+   mv_control                     2513597556     2513597556   IGUAL
+   mv_ventas_mensuales             847571384      847571384   IGUAL
+   stg_costos_proveedor           3844656094     3844656094   IGUAL
+   stg_log_kds                    2075725332     2075725332   IGUAL
+   Eventos en cada nodo (en el Nodo 2 quedan deshabilitados por ser réplica):
+      Nodo 1: ev_dw_actualizacion ENABLED
+      Nodo 1: ev_dw_particiones ENABLED
+      Nodo 2: ev_dw_actualizacion SLAVESIDE_DISABLED
+      Nodo 2: ev_dw_particiones SLAVESIDE_DISABLED
+   [OK] las tablas del data warehouse son idénticas en ambos nodos
+
+==================================================================
+ VERIFICACIÓN DE CONSISTENCIA NODO 1 <-> NODO 2
+==================================================================
+
+>> 1. Hilos de replicación
+   [OK] restaurante_nodo1_salon: Replica_IO_Running=Yes, Replica_SQL_Running=Yes
+   [OK] restaurante_nodo2_cocina: Replica_IO_Running=Yes, Replica_SQL_Running=Yes
+
+>> 2. Convergencia de transacciones (GTID)
+   [OK] ambos nodos ejecutaron el mismo conjunto de transacciones
+   GTID Nodo 1: 7352041c-df98-11f1-a4ac-96dcb5011d52:1-6,7354e097-df98-11f1-beef-4a8db7ba9e9f:1-141
+   GTID Nodo 2: 7352041c-df98-11f1-a4ac-96dcb5011d52:1-6,7354e097-df98-11f1-beef-4a8db7ba9e9f:1-141
+
+>> 3. Huella digital de cada tabla
+   TABLA                       NODO 1 (filas:huella)      NODO 2 (filas:huella)      RESULTADO
+   clientes                    3005:591884AA751A317A      3005:591884AA751A317A      IGUAL
+   comandas                    120008:2FBC5EB9F2E57CA7    120008:2FBC5EB9F2E57CA7    IGUAL
+   detalle_comanda             310442:4D71E4F37EEDA1D8    310442:4D71E4F37EEDA1D8    IGUAL
+   historial_estados_comanda   470328:1B9C826D31B81272    470328:1B9C826D31B81272    IGUAL
+   mesas                       10:D3BA7C7BD31866DB        10:D3BA7C7BD31866DB        IGUAL
+   movimientos_stock           17:43C27A7CB4C5D3E1        17:43C27A7CB4C5D3E1        IGUAL
+   pagos                       115161:EC871382DCB98281    115161:EC871382DCB98281    IGUAL
+   productos_menu              12:CF064A11C1973B57        12:CF064A11C1973B57        IGUAL
+
+   [OK] CONSISTENTE: las 8 tablas son idénticas en ambos nodos
+
+==================================================================
+ FASE 3 COMPLETA en 477.5 s
+==================================================================

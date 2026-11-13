@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tablero del restaurante</title>
+<!--
+  AE4 - TIFAS Fase 3: tablero dimensional.
+  Plantilla autocontenida (sin librerías ni conexión a internet). Los datos los
+  inserta pruebas_fase3/generar_tablero.sh a partir de fase3/14_tablero_datos.sql.
+-->
+<style>
+  :root {
+    --fondo: #f6f5f2; --panel: #ffffff; --texto: #1f2328; --suave: #646a73; --linea: #e3e1dc;
+    --acento: #b4461f; --acento2: #2f6f8f; --acento3: #6b8f3a; --acento4: #8a5aa8;
+    --calor0: #f3ece4; --calor1: #b4461f; --positivo: #2e7d4f; --negativo: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --fondo: #16181b; --panel: #1f2226; --texto: #e8e6e3; --suave: #9aa0a6; --linea: #33373d;
+      --acento: #e07a4f; --acento2: #6fb0d1; --acento3: #9cc46a; --acento4: #b893d4;
+      --calor0: #262a2f; --calor1: #e07a4f; --positivo: #6cc28f; --negativo: #f08a80;
+    }
+  }
+  :root[data-theme="dark"] {
+    --fondo: #16181b; --panel: #1f2226; --texto: #e8e6e3; --suave: #9aa0a6; --linea: #33373d;
+    --acento: #e07a4f; --acento2: #6fb0d1; --acento3: #9cc46a; --acento4: #b893d4;
+    --calor0: #262a2f; --calor1: #e07a4f; --positivo: #6cc28f; --negativo: #f08a80;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--fondo); color: var(--texto);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { padding: 24px 16px 8px; max-width: 1200px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--suave); font-size: 13px; }
+  main { max-width: 1200px; margin: 0 auto; padding: 8px 16px 32px;
+         display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; }
+  .panel { background: var(--panel); border: 1px solid var(--linea); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+  .panel h2 { font-size: 14px; margin: 0 0 2px; }
+  .panel .nota { color: var(--suave); font-size: 12px; margin: 0 0 10px; }
+  .c3 { grid-column: span 3; } .c4 { grid-column: span 4; } .c5 { grid-column: span 5; }
+  .c6 { grid-column: span 6; } .c7 { grid-column: span 7; } .c8 { grid-column: span 8; } .c12 { grid-column: span 12; }
+  @media (max-width: 900px) { .c3 { grid-column: span 6; } .c4, .c5, .c6, .c7, .c8 { grid-column: span 12; } }
+  @media (max-width: 520px) { .c3 { grid-column: span 12; } }
+  .kpi .valor { font-size: 26px; font-weight: 650; letter-spacing: -0.5px; }
+  .kpi .delta { font-size: 12px; margin-top: 2px; }
+  .positivo { color: var(--positivo); } .negativo { color: var(--negativo); }
+  svg { display: block; width: 100%; height: auto; }
+  svg text { fill: var(--suave); font-size: 11px; }
+  .eje { stroke: var(--linea); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 6px; border-bottom: 1px solid var(--linea); vertical-align: middle; }
+  th { color: var(--suave); font-weight: 500; font-size: 12px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .barra { height: 8px; border-radius: 4px; background: var(--acento); }
+  .barra.b2 { background: var(--acento2); }
+  .fila-barra { display: grid; grid-template-columns: minmax(110px, 38%) 1fr auto; gap: 8px; align-items: center; margin: 6px 0; }
+  .fila-barra .etq { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fila-barra .val { font-variant-numeric: tabular-nums; color: var(--suave); font-size: 12px; }
+  .leyenda { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--suave); margin-top: 6px; }
+  .leyenda i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  .calor { display: grid; grid-template-columns: 44px repeat(var(--cols), 1fr); gap: 2px; font-size: 11px; }
+  .calor div { min-height: 22px; border-radius: 3px; display: flex; align-items: center; justify-content: center; }
+  .calor .rot { color: var(--suave); justify-content: flex-start; }
+  .chip { display: inline-block; padding: 1px 7px; border-radius: 10px; background: var(--calor0); font-size: 12px; }
+  footer { max-width: 1200px; margin: 0 auto; padding: 0 16px 28px; color: var(--suave); font-size: 12px; }
+  .scroll { overflow-x: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Tablero de gestión del restaurante</h1>
+  <div class="sub" id="sub"></div>
+</header>
+<main>
+  <section class="panel c3 kpi"><h2>Facturación</h2><p class="nota">Enero a octubre de 2026</p><div class="valor" id="k-fact"></div><div class="delta" id="k-fact-d"></div></section>
+  <section class="panel c3 kpi"><h2>Tickets</h2><p class="nota">Comandas cobradas</p><div class="valor" id="k-tick"></div><div class="delta" id="k-tick-d"></div></section>
+  <section class="panel c3 kpi"><h2>Ticket promedio</h2><p class="nota">Facturación / tickets</p><div class="valor" id="k-prom"></div><div class="delta" id="k-prom-d"></div></section>
+  <section class="panel c3 kpi"><h2>Margen bruto</h2><p class="nota">Sobre el costo de la planilla de proveedores</p><div class="valor" id="k-marg"></div><div class="delta" id="k-marg-d"></div></section>
+
+  <section class="panel c8"><h2>Facturación mensual</h2><p class="nota">Vista materializada mv_ventas_mensuales · importe y margen</p><div id="g-mensual"></div>
+    <div class="leyenda"><span><i style="background:var(--acento)"></i>Importe</span><span><i style="background:var(--acento2)"></i>Margen</span></div></section>
+  <section class="panel c4"><h2>Ventas por categoría</h2><p class="nota">2026 · margen sobre el importe de cada categoría</p><div id="g-categorias"></div></section>
+
+  <section class="panel c7"><h2>Tickets por día y hora</h2><p class="nota">2026 · dónde se concentra la demanda</p><div class="scroll" id="g-calor"></div></section>
+  <section class="panel c5"><h2>Sector y turno</h2><p class="nota">2026 · importe por sector del salón</p><div id="g-sectores"></div>
+    <div class="leyenda"><span><i style="background:var(--acento)"></i>Cena</span><span><i style="background:var(--acento2)"></i>Almuerzo</span></div></section>
+
+  <section class="panel c6"><h2>Productos más vendidos</h2><p class="nota">2026 · por importe</p><div id="g-productos"></div></section>
+  <section class="panel c6"><h2>Tiempo de preparación por hora</h2><p class="nota">Log del KDS (ago-oct 2026) · minutos promedio por estación</p><div id="g-prep"></div><div class="leyenda" id="ley-prep"></div></section>
+
+  <section class="panel c7"><h2>Qué se pide junto (reglas de asociación)</h2><p class="nota">KDD · Apriori sobre los tickets · lift &gt; 1 = se piden juntos más de lo esperable</p><div class="scroll" id="t-reglas"></div></section>
+  <section class="panel c5"><h2>Segmentos de clientes (RFM)</h2><p class="nota">KDD · recencia, frecuencia y monto al 31/10/2026</p><div id="t-rfm"></div></section>
+
+  <section class="panel c12"><h2>Medios de pago</h2><p class="nota">2026 · participación en la facturación</p><div id="g-pagos"></div></section>
+</main>
+<footer id="pie"></footer>
+
+<script>
+const DATOS =
+// DATOS
+{"kpi": {"margen": 1729617495.70, "unidades": 303420, "facturacion": 2706732596.73, "facturacion_anterior": 1450315235.32}, "nodo": "nodo1-salon", "reglas": [{"a": "Empanada Criolla Cortada a Cuchillo", "b": "Cerveza Artesanal IPA 500ml", "lift": 4.028, "soporte": 0.1499, "confianza": 0.6039}, {"a": "Ojo de Bife con Papas Rústicas", "b": "Vino Malbec Reserva 750ml", "lift": 3.329, "soporte": 0.1068, "confianza": 0.7005}, {"a": "Sorrentinos Caseros de Salmón y Ricota", "b": "Volcán de Chocolate con Helado", "lift": 3.313, "soporte": 0.1385, "confianza": 0.5545}, {"a": "Bife de Chorizo Angus 400g", "b": "Vino Malbec Reserva 750ml", "lift": 3.313, "soporte": 0.1037, "confianza": 0.6972}, {"a": "Sorrentinos Caseros de Salmón y Ricota", "b": "Agua Mineral sin Gas 500ml", "lift": 2.826, "soporte": 0.1498, "confianza": 0.5999}, {"a": "Volcán de Chocolate con Helado", "b": "Agua Mineral sin Gas 500ml", "lift": 2.328, "soporte": 0.0827, "confianza": 0.4942}, {"a": "Provoleta a la Parrilla con Orégano", "b": "Ojo de Bife con Papas Rústicas", "lift": 2.291, "soporte": 0.0771, "confianza": 0.3493}, {"a": "Provoleta a la Parrilla con Orégano", "b": "Vino Malbec Reserva 750ml", "lift": 2.281, "soporte": 0.1060, "confianza": 0.4800}], "mensual": [{"margen": 75027352.69, "importe": 117814941.13, "periodo": "2025-01"}, {"margen": 69483590.47, "importe": 108923205.57, "periodo": "2025-02"}, {"margen": 76915763.66, "importe": 120073306.85, "periodo": "2025-03"}, {"margen": 78876658.96, "importe": 123305777.50, "periodo": "2025-04"}, {"margen": 89570335.13, "importe": 140532378.28, "periodo": "2025-05"}, {"margen": 96780482.66, "importe": 151229300.59, "periodo": "2025-06"}, {"margen": 108695147.36, "importe": 169255912.02, "periodo": "2025-07"}, {"margen": 112061649.94, "importe": 175120642.01, "periodo": "2025-08"}, {"margen": 104495602.15, "importe": 163578778.88, "periodo": "2025-09"}, {"margen": 115224360.78, "importe": 180480992.49, "periodo": "2025-10"}, {"margen": 118598131.57, "importe": 186229141.96, "periodo": "2025-11"}, {"margen": 139262430.90, "importe": 217991907.46, "periodo": "2025-12"}, {"margen": 148970435.99, "importe": 233545163.15, "periodo": "2026-01"}, {"margen": 138426178.80, "importe": 216448852.68, "periodo": "2026-02"}, {"margen": 147055455.59, "importe": 229782579.47, "periodo": "2026-03"}, {"margen": 147395815.12, "importe": 230934613.63, "periodo": "2026-04"}, {"margen": 176358021.58, "importe": 275810232.59, "periodo": "2026-05"}, {"margen": 181303289.02, "importe": 283650255.07, "periodo": "2026-06"}, {"margen": 182147818.34, "importe": 285256831.26, "periodo": "2026-07"}, {"margen": 186742074.95, "importe": 292977073.88, "periodo": "2026-08"}, {"margen": 196823679.96, "importe": 307842795.00, "periodo": "2026-09"}, {"margen": 224394726.35, "importe": 350484200.00, "periodo": "2026-10"}], "tickets": {"actual": 60600, "anterior": 43968}, "volumen": {"particiones": 27, "hechos_ventas": 297887, "hechos_preparacion": 50562}, "sectores": [{"turno": "ALMUERZO", "sector": "Barra / Cocktails", "importe": 216192827.95}, {"turno": "CENA", "sector": "Barra / Cocktails", "importe": 329770343.32}, {"turno": "ALMUERZO", "sector": "Salón Principal", "importe": 544694553.97}, {"turno": "CENA", "sector": "Salón Principal", "importe": 813113466.26}, {"turno": "ALMUERZO", "sector": "Terraza Exterior", "importe": 326173731.93}, {"turno": "CENA", "sector": "Terraza Exterior", "importe": 476787673.30}], "productos": [{"nombre": "Sorrentinos Caseros de Salmón y Ricota", "importe": 483907451.25, "unidades": 30214}, {"nombre": "Gaseosa Cola 500ml", "importe": 111798148.75, "unidades": 38856}, {"nombre": "Volcán de Chocolate con Helado", "importe": 65586039.19, "unidades": 10131}, {"nombre": "Ojo de Bife con Papas Rústicas", "importe": 400599276.67, "unidades": 18560}, {"nombre": "Vino Malbec Reserva 750ml", "importe": 326831133.99, "unidades": 19240}, {"nombre": "Empanada Criolla Cortada a Cuchillo", "importe": 238276315.23, "unidades": 82768}, {"nombre": "Cerveza Artesanal IPA 500ml", "importe": 67066380.07, "unidades": 13567}, {"nombre": "Milanesa Napolitana con Papas Fritas", "importe": 453383561.66, "unidades": 30589}, {"nombre": "Agua Mineral sin Gas 500ml", "importe": 48284292.36, "unidades": 19164}, {"nombre": "Provoleta a la Parrilla con Orégano", "importe": 102641577.63, "unidades": 13427}, {"nombre": "Bife de Chorizo Angus 400g", "importe": 361270443.57, "unidades": 17869}, {"nombre": "Flan Casero con Dulce de Leche y Crema", "importe": 47087976.36, "unidades": 9035}], "refrescos": {"ultimo": "13/11/2026 16:34:55", "cantidad": 5}, "segmentos": [{"monto": 1141297879.76, "clientes": 568, "recencia": 4, "segmento": "Campeones", "frecuencia": 50.6}, {"monto": 210163860.45, "clientes": 590, "recencia": 111, "segmento": "Dormidos", "frecuencia": 9.2}, {"monto": 395566490.40, "clientes": 376, "recencia": 42, "segmento": "En riesgo", "frecuencia": 26.9}, {"monto": 570126053.03, "clientes": 503, "recencia": 12, "segmento": "Leales", "frecuencia": 28.4}, {"monto": 70013518.06, "clientes": 144, "recencia": 16, "segmento": "Ocasionales", "frecuencia": 12.1}, {"monto": 115270525.53, "clientes": 232, "recencia": 5, "segmento": "Recientes", "frecuencia": 12.6}], "categorias": [{"margen": 327522278.31, "nombre": "BEBIDA", "importe": 553979955.17}, {"margen": 233813219.92, "nombre": "ENTRADA", "importe": 340917892.86}, {"margen": 1083818800.31, "nombre": "PLATO_PRINCIPAL", "importe": 1699160733.15}, {"margen": 84463197.16, "nombre": "POSTRE", "importe": 112674015.55}], "mapa_calor": [{"dia": 1, "hora": 12, "tickets": 1138}, {"dia": 1, "hora": 13, "tickets": 1157}, {"dia": 1, "hora": 14, "tickets": 1145}, {"dia": 1, "hora": 20, "tickets": 1371}, {"dia": 1, "hora": 21, "tickets": 1383}, {"dia": 1, "hora": 22, "tickets": 1335}, {"dia": 1, "hora": 23, "tickets": 1091}, {"dia": 2, "hora": 12, "tickets": 1151}, {"dia": 2, "hora": 13, "tickets": 1177}, {"dia": 2, "hora": 14, "tickets": 1123}, {"dia": 2, "hora": 20, "tickets": 1350}, {"dia": 2, "hora": 21, "tickets": 1349}, {"dia": 2, "hora": 22, "tickets": 1316}, {"dia": 2, "hora": 23, "tickets": 1142}, {"dia": 3, "hora": 12, "tickets": 1153}, {"dia": 3, "hora": 13, "tickets": 1165}, {"dia": 3, "hora": 14, "tickets": 1117}, {"dia": 3, "hora": 20, "tickets": 1388}, {"dia": 3, "hora": 21, "tickets": 1333}, {"dia": 3, "hora": 22, "tickets": 1313}, {"dia": 3, "hora": 23, "tickets": 1095}, {"dia": 4, "hora": 12, "tickets": 1185}, {"dia": 4, "hora": 13, "tickets": 1274}, {"dia": 4, "hora": 14, "tickets": 1203}, {"dia": 4, "hora": 20, "tickets": 1353}, {"dia": 4, "hora": 21, "tickets": 1477}, {"dia": 4, "hora": 22, "tickets": 1347}, {"dia": 4, "hora": 23, "tickets": 1084}, {"dia": 5, "hora": 12, "tickets": 1144}, {"dia": 5, "hora": 13, "tickets": 1149}, {"dia": 5, "hora": 14, "tickets": 1175}, {"dia": 5, "hora": 20, "tickets": 1362}, {"dia": 5, "hora": 21, "tickets": 1372}, {"dia": 5, "hora": 22, "tickets": 1346}, {"dia": 5, "hora": 23, "tickets": 1104}, {"dia": 6, "hora": 12, "tickets": 1153}, {"dia": 6, "hora": 13, "tickets": 1201}, {"dia": 6, "hora": 14, "tickets": 1125}, {"dia": 6, "hora": 20, "tickets": 1388}, {"dia": 6, "hora": 21, "tickets": 1364}, {"dia": 6, "hora": 22, "tickets": 1347}, {"dia": 6, "hora": 23, "tickets": 1118}, {"dia": 7, "hora": 12, "tickets": 1112}, {"dia": 7, "hora": 13, "tickets": 1206}, {"dia": 7, "hora": 14, "tickets": 1121}, {"dia": 7, "hora": 20, "tickets": 1299}, {"dia": 7, "hora": 21, "tickets": 1359}, {"dia": 7, "hora": 22, "tickets": 1287}, {"dia": 7, "hora": 23, "tickets": 1153}], "generado_en": "13/11/2026 16:36", "medios_pago": [{"metodo": "TARJETA_CREDITO", "importe": 815763153.53}, {"metodo": "TARJETA_DEBITO", "importe": 808035679.68}, {"metodo": "EFECTIVO", "importe": 542805859.21}, {"metodo": "TRANSFERENCIA_QR", "importe": 540127904.31}], "preparacion": [{"hora": 12, "minutos": 15.2, "estacion": "PARRILLA"}, {"hora": 13, "minutos": 16.8, "estacion": "PARRILLA"}, {"hora": 14, "minutos": 16.3, "estacion": "PARRILLA"}, {"hora": 15, "minutos": 15.7, "estacion": "PARRILLA"}, {"hora": 20, "minutos": 15.1, "estacion": "PARRILLA"}, {"hora": 21, "minutos": 18.9, "estacion": "PARRILLA"}, {"hora": 22, "minutos": 21.4, "estacion": "PARRILLA"}, {"hora": 23, "minutos": 17.9, "estacion": "PARRILLA"}, {"hora": 0, "minutos": 16.2, "estacion": "PARRILLA"}, {"hora": 12, "minutos": 11.9, "estacion": "COCINA_CALIENTE"}, {"hora": 13, "minutos": 13.3, "estacion": "COCINA_CALIENTE"}, {"hora": 14, "minutos": 12.8, "estacion": "COCINA_CALIENTE"}, {"hora": 15, "minutos": 12.4, "estacion": "COCINA_CALIENTE"}, {"hora": 20, "minutos": 12.0, "estacion": "COCINA_CALIENTE"}, {"hora": 21, "minutos": 15.2, "estacion": "COCINA_CALIENTE"}, {"hora": 22, "minutos": 16.9, "estacion": "COCINA_CALIENTE"}, {"hora": 23, "minutos": 13.6, "estacion": "COCINA_CALIENTE"}, {"hora": 0, "minutos": 12.8, "estacion": "COCINA_CALIENTE"}, {"hora": 12, "minutos": 4.1, "estacion": "PASTELERIA"}, {"hora": 13, "minutos": 4.6, "estacion": "PASTELERIA"}, {"hora": 14, "minutos": 4.2, "estacion": "PASTELERIA"}, {"hora": 15, "minutos": 4.1, "estacion": "PASTELERIA"}, {"hora": 20, "minutos": 4.1, "estacion": "PASTELERIA"}, {"hora": 21, "minutos": 5.5, "estacion": "PASTELERIA"}, {"hora": 22, "minutos": 5.7, "estacion": "PASTELERIA"}, {"hora": 23, "minutos": 4.4, "estacion": "PASTELERIA"}, {"hora": 0, "minutos": 4.4, "estacion": "PASTELERIA"}, {"hora": 12, "minutos": 1.3, "estacion": "BARRA"}, {"hora": 13, "minutos": 1.5, "estacion": "BARRA"}, {"hora": 14, "minutos": 1.4, "estacion": "BARRA"}, {"hora": 15, "minutos": 1.3, "estacion": "BARRA"}, {"hora": 20, "minutos": 1.3, "estacion": "BARRA"}, {"hora": 21, "minutos": 1.8, "estacion": "BARRA"}, {"hora": 22, "minutos": 1.9, "estacion": "BARRA"}, {"hora": 23, "minutos": 1.4, "estacion": "BARRA"}]}
+;
+
+const $ = id => document.getElementById(id);
+const nf = new Intl.NumberFormat('es-AR', { maximumFractionDigits: 0 });
+const nf1 = new Intl.NumberFormat('es-AR', { maximumFractionDigits: 1, minimumFractionDigits: 1 });
+const pesos = v => '$ ' + nf.format(v);
+const millones = v => '$ ' + nf1.format(v / 1e6) + ' M';
+const pct = v => nf1.format(v * 100) + ' %';
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+const DIAS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+const NOMBRE = { PLATO_PRINCIPAL: 'Platos principales', ENTRADA: 'Entradas', POSTRE: 'Postres', BEBIDA: 'Bebidas',
+  EFECTIVO: 'Efectivo', TARJETA_DEBITO: 'Débito', TARJETA_CREDITO: 'Crédito', TRANSFERENCIA_QR: 'Transferencia / QR',
+  PARRILLA: 'Parrilla', COCINA_CALIENTE: 'Cocina', PASTELERIA: 'Pastelería', BARRA: 'Barra' };
+const nombre = k => NOMBRE[k] || k;
+
+function delta(el, actual, anterior, sufijo) {
+  const d = actual / anterior - 1;
+  el.className = 'delta ' + (d >= 0 ? 'positivo' : 'negativo');
+  el.textContent = (d >= 0 ? '▲ ' : '▼ ') + pct(Math.abs(d)) + ' ' + sufijo;
+}
+
+function barras(cont, filas, fmt, clase) {
+  const max = Math.max(...filas.map(f => f.v));
+  cont.innerHTML = filas.map(f => `<div class="fila-barra"><span class="etq" title="${f.e}">${f.e}</span>
+    <div><div class="barra ${clase || ''}" style="width:${(f.v / max * 100).toFixed(1)}%"></div></div>
+    <span class="val">${fmt(f)}</span></div>`).join('');
+}
+
+function lineas(cont, etiquetas, series, opciones) {
+  const W = 760, H = 240, m = { i: 56, d: 10, s: 10, a: 26 };
+  const todos = series.flatMap(s => s.valores);
+  const max = Math.max(...todos) * 1.05, min = opciones.desdeCero ? 0 : Math.min(...todos) * 0.9;
+  const x = i => m.i + i * (W - m.i - m.d) / (etiquetas.length - 1);
+  const y = v => H - m.a - (v - min) / (max - min) * (H - m.s - m.a);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${opciones.titulo}">`;
+  for (let k = 0; k <= 4; k++) {
+    const v = min + (max - min) * k / 4;
+    svg += `<line class="eje" x1="${m.i}" x2="${W - m.d}" y1="${y(v)}" y2="${y(v)}"/>`;
+    svg += `<text x="${m.i - 6}" y="${y(v) + 4}" text-anchor="end">${opciones.fmtEje(v)}</text>`;
+  }
+  etiquetas.forEach((e, i) => {
+    if (i % (opciones.cadaEtiqueta || 1) === 0) svg += `<text x="${x(i)}" y="${H - 8}" text-anchor="middle">${e}</text>`;
+  });
+  series.forEach(s => {
+    const p = s.valores.map((v, i) => `${x(i)},${y(v)}`).join(' ');
+    if (s.area) svg += `<polygon points="${x(0)},${y(min)} ${p} ${x(s.valores.length - 1)},${y(min)}" fill="${s.color}" opacity="0.12"/>`;
+    svg += `<polyline points="${p}" fill="none" stroke="${s.color}" stroke-width="2.2" stroke-linejoin="round"/>`;
+  });
+  cont.innerHTML = svg + '</svg>';
+}
+
+function dibujar() {
+  const D = DATOS;
+  $('sub').textContent = `Generado el ${D.generado_en} desde ${D.nodo} · vista materializada refrescada por última vez el ${D.refrescos.ultimo}`;
+
+  // KPIs
+  const tickProm = D.kpi.facturacion / D.tickets.actual, tickPromAnt = D.kpi.facturacion_anterior / D.tickets.anterior;
+  $('k-fact').textContent = millones(D.kpi.facturacion);
+  delta($('k-fact-d'), D.kpi.facturacion, D.kpi.facturacion_anterior, 'contra ene-oct 2025');
+  $('k-tick').textContent = nf.format(D.tickets.actual);
+  delta($('k-tick-d'), D.tickets.actual, D.tickets.anterior, 'contra ene-oct 2025');
+  $('k-prom').textContent = pesos(tickProm);
+  delta($('k-prom-d'), tickProm, tickPromAnt, 'nominal, con inflación');
+  $('k-marg').textContent = pct(D.kpi.margen / D.kpi.facturacion);
+  $('k-marg-d').textContent = millones(D.kpi.margen) + ' de margen';
+
+  // Mensual
+  const mensual = D.mensual.slice().sort((a, b) => a.periodo.localeCompare(b.periodo));
+  lineas($('g-mensual'), mensual.map(m => MESES[+m.periodo.slice(5) - 1] + (m.periodo.slice(5) === '01' ? ' ' + m.periodo.slice(2, 4) : '')),
+    [{ valores: mensual.map(m => m.importe), color: css('--acento'), area: true },
+     { valores: mensual.map(m => m.margen), color: css('--acento2') }],
+    { titulo: 'Facturación mensual', desdeCero: true, fmtEje: v => nf.format(v / 1e6) + ' M', cadaEtiqueta: 2 });
+
+  // Categorías
+  barras($('g-categorias'), D.categorias.sort((a, b) => b.importe - a.importe)
+    .map(c => ({ e: nombre(c.nombre), v: c.importe, m: c.margen / c.importe })),
+    f => millones(f.v) + ' · ' + pct(f.m));
+
+  // Mapa de calor
+  const horas = [...new Set(D.mapa_calor.map(c => c.hora))].sort((a, b) => a - b);
+  const maxT = Math.max(...D.mapa_calor.map(c => c.tickets));
+  const celda = (d, h) => (D.mapa_calor.find(c => c.dia === d && c.hora === h) || { tickets: 0 }).tickets;
+  let html = `<div class="calor" style="--cols:${horas.length}"><div></div>` + horas.map(h => `<div class="rot">${h} h</div>`).join('');
+  for (let d = 1; d <= 7; d++) {
+    html += `<div class="rot">${DIAS[d - 1]}</div>`;
+    horas.forEach(h => {
+      const t = celda(d, h), a = t / maxT;
+      html += `<div title="${DIAS[d - 1]} ${h} h: ${nf.format(t)} tickets" style="background:color-mix(in srgb, var(--calor1) ${Math.round(a * 100)}%, var(--calor0));color:${a > 0.55 ? '#fff' : 'inherit'}">${nf.format(t)}</div>`;
+    });
+  }
+  $('g-calor').innerHTML = html + '</div>';
+
+  // Sectores (barras apiladas cena + almuerzo)
+  const sect = {};
+  D.sectores.forEach(s => { sect[s.sector] = sect[s.sector] || { CENA: 0, ALMUERZO: 0 }; sect[s.sector][s.turno] = (sect[s.sector][s.turno] || 0) + s.importe; });
+  const maxS = Math.max(...Object.values(sect).map(s => s.CENA + s.ALMUERZO));
+  $('g-sectores').innerHTML = Object.entries(sect).sort((a, b) => (b[1].CENA + b[1].ALMUERZO) - (a[1].CENA + a[1].ALMUERZO)).map(([n, s]) =>
+    `<div class="fila-barra"><span class="etq">${n}</span><div style="display:flex">
+      <div class="barra" style="width:${(s.CENA / maxS * 100).toFixed(1)}%;border-radius:4px 0 0 4px"></div>
+      <div class="barra b2" style="width:${(s.ALMUERZO / maxS * 100).toFixed(1)}%;border-radius:0 4px 4px 0"></div></div>
+      <span class="val">${millones(s.CENA + s.ALMUERZO)}</span></div>`).join('');
+
+  // Productos
+  barras($('g-productos'), D.productos.sort((a, b) => b.importe - a.importe).slice(0, 8)
+    .map(p => ({ e: p.nombre, v: p.importe, u: p.unidades })), f => millones(f.v) + ' · ' + nf.format(f.u) + ' u.', 'b2');
+
+  // Preparación por hora
+  const estaciones = ['PARRILLA', 'COCINA_CALIENTE', 'PASTELERIA', 'BARRA'];
+  const colores = [css('--acento'), css('--acento2'), css('--acento4'), css('--acento3')];
+  const hp = [...new Set(D.preparacion.map(p => p.hora))].filter(h => h >= 12).sort((a, b) => a - b);
+  lineas($('g-prep'), hp.map(h => h + ' h'), estaciones.map((e, i) => ({
+      valores: hp.map(h => (D.preparacion.find(p => p.estacion === e && p.hora === h) || { minutos: null }).minutos ?? 0),
+      color: colores[i] })),
+    { titulo: 'Tiempo de preparación', desdeCero: true, fmtEje: v => nf1.format(v) + ' min' });
+  $('ley-prep').innerHTML = estaciones.map((e, i) => `<span><i style="background:${colores[i]}"></i>${nombre(e)}</span>`).join('');
+
+  // Reglas
+  $('t-reglas').innerHTML = '<table><tr><th>Quien pide</th><th>también pide</th><th class="num">Confianza</th><th class="num">Lift</th></tr>' +
+    D.reglas.sort((a, b) => b.lift - a.lift).map(r => `<tr><td>${r.a}</td><td>${r.b}</td><td class="num">${pct(r.confianza)}</td>
+      <td class="num"><span class="chip">${nf1.format(r.lift)}×</span></td></tr>`).join('') + '</table>';
+
+  // RFM
+  const totalM = D.segmentos.reduce((s, x) => s + x.monto, 0);
+  $('t-rfm').innerHTML = '<table><tr><th>Segmento</th><th class="num">Clientes</th><th class="num">Visitas</th><th class="num">% ventas</th></tr>' +
+    D.segmentos.sort((a, b) => b.monto - a.monto).map(s => `<tr><td>${s.segmento}</td><td class="num">${nf.format(s.clientes)}</td>
+      <td class="num">${nf1.format(s.frecuencia)}</td><td class="num">${pct(s.monto / totalM)}</td></tr>`).join('') + '</table>';
+
+  // Medios de pago
+  const totalP = D.medios_pago.reduce((s, x) => s + x.importe, 0);
+  barras($('g-pagos'), D.medios_pago.sort((a, b) => b.importe - a.importe)
+    .map(p => ({ e: nombre(p.metodo), v: p.importe })), f => pct(f.v / totalP) + ' · ' + millones(f.v));
+
+  $('pie').textContent = `Data warehouse restaurante_dw · ${nf.format(D.volumen.hechos_ventas)} hechos de ventas en ${D.volumen.particiones} particiones mensuales · ` +
+    `${nf.format(D.volumen.hechos_preparacion)} eventos de cocina · fuentes: base relacional, planilla de costos de proveedores y log del KDS · ` +
+    `${D.refrescos.cantidad} refrescos de la vista materializada registrados.`;
+}
+
+if (DATOS) dibujar(); else document.querySelector('main').innerHTML = '<p>Sin datos: ejecutar pruebas_fase3/generar_tablero.sh</p>';
+</script>
+</body>
+</html>

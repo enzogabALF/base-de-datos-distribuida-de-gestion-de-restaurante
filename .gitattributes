@@ -3,3 +3,6 @@
 *.sh text eol=lf
 *.cfg text eol=lf
 Dockerfile text eol=lf
+# Fuente de datos de la Fase 3: planilla exportada de Excel (Windows-1252, CRLF).
+# Se versiona byte a byte para que el ETL reciba exactamente el mismo archivo.
+*.csv -text
