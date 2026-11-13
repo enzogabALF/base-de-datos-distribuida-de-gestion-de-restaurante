@@ -7,25 +7,30 @@ SET sql_log_bin = 0;
 
 USE restaurante_db;
 
+-- Reloj fijo para la carga inicial: CURRENT_TIMESTAMP devuelve el mismo instante en
+-- ambos nodos, así created_at, ultima_actualizacion y fecha_movimiento de las semillas
+-- son idénticos aunque cada nodo se inicialice en un segundo distinto.
+SET TIMESTAMP = UNIX_TIMESTAMP('2026-11-01 09:00:00');
+
 -- 1. Semilla de Clientes Iniciales
-INSERT INTO clientes (nombre_completo, cuit_dni, telefono, email, puntos_fidelidad) VALUES
-('Juan Pérez', '20-34567890-9', '11-4567-8901', 'juan.perez@email.com', 150),
-('María Rodríguez', '27-38123456-4', '11-6789-0123', 'maria.rodriguez@email.com', 80),
-('Martín Palermo', '20-23456789-2', '11-3456-7890', 'martin.palermo@email.com', 320),
-('Lucía Morales', '27-40987654-1', '11-5678-9012', 'lucia.morales@email.com', 50);
+INSERT INTO clientes (id_cliente, nombre_completo, cuit_dni, telefono, email, puntos_fidelidad) VALUES
+(1, 'Juan Pérez', '20-34567890-9', '11-4567-8901', 'juan.perez@email.com', 150),
+(2, 'María Rodríguez', '27-38123456-4', '11-6789-0123', 'maria.rodriguez@email.com', 80),
+(3, 'Martín Palermo', '20-23456789-2', '11-3456-7890', 'martin.palermo@email.com', 320),
+(4, 'Lucía Morales', '27-40987654-1', '11-5678-9012', 'lucia.morales@email.com', 50);
 
 -- 2. Semilla de Mesas de Salón y Terraza
-INSERT INTO mesas (numero_mesa, capacidad, sector, estado) VALUES
-(1, 2, 'Salón Principal', 'LIBRE'),
-(2, 4, 'Salón Principal', 'LIBRE'),
-(3, 4, 'Salón Principal', 'LIBRE'),
-(4, 6, 'Salón Principal', 'LIBRE'),
-(5, 8, 'Salón Principal', 'LIBRE'),
-(6, 2, 'Terraza Exterior', 'LIBRE'),
-(7, 4, 'Terraza Exterior', 'LIBRE'),
-(8, 4, 'Terraza Exterior', 'LIBRE'),
-(9, 2, 'Barra / Cocktails', 'LIBRE'),
-(10, 2, 'Barra / Cocktails', 'LIBRE');
+INSERT INTO mesas (id_mesa, numero_mesa, capacidad, sector, estado) VALUES
+(1, 1, 2, 'Salón Principal', 'LIBRE'),
+(2, 2, 4, 'Salón Principal', 'LIBRE'),
+(3, 3, 4, 'Salón Principal', 'LIBRE'),
+(4, 4, 6, 'Salón Principal', 'LIBRE'),
+(5, 5, 8, 'Salón Principal', 'LIBRE'),
+(6, 6, 2, 'Terraza Exterior', 'LIBRE'),
+(7, 7, 4, 'Terraza Exterior', 'LIBRE'),
+(8, 8, 4, 'Terraza Exterior', 'LIBRE'),
+(9, 9, 2, 'Barra / Cocktails', 'LIBRE'),
+(10, 10, 2, 'Barra / Cocktails', 'LIBRE');
 
 -- 3. Semilla de Productos de Menú
 INSERT INTO productos_menu (id_producto, nombre, categoria, precio, stock_disponible) VALUES
@@ -43,18 +48,19 @@ INSERT INTO productos_menu (id_producto, nombre, categoria, precio, stock_dispon
 (12, 'Vino Malbec Reserva 750ml', 'BEBIDA', 18900.00, 45);
 
 -- 4. Semilla de Registro de Movimientos de Stock Inicial
-INSERT INTO movimientos_stock (id_producto, tipo_movimiento, cantidad, stock_previo, stock_posterior, motivo, nodo_origen) VALUES
-(1, 'INGRESO_PROVEEDOR', 80, 0, 80, 'Carga de stock inicial de apertura', 'NODO_2_COCINA'),
-(2, 'INGRESO_PROVEEDOR', 40, 0, 40, 'Carga de stock inicial de apertura', 'NODO_2_COCINA'),
-(3, 'INGRESO_PROVEEDOR', 35, 0, 35, 'Carga de stock inicial de apertura', 'NODO_2_COCINA'),
-(4, 'INGRESO_PROVEEDOR', 30, 0, 30, 'Carga de stock inicial de apertura', 'NODO_2_COCINA'),
-(5, 'INGRESO_PROVEEDOR', 25, 0, 25, 'Carga de stock inicial de apertura', 'NODO_2_COCINA'),
-(6, 'INGRESO_PROVEEDOR', 50, 0, 50, 'Carga de stock inicial de apertura', 'NODO_2_COCINA'),
-(7, 'INGRESO_PROVEEDOR', 20, 0, 20, 'Carga de stock inicial de apertura', 'NODO_2_COCINA'),
-(8, 'INGRESO_PROVEEDOR', 30, 0, 30, 'Carga de stock inicial de apertura', 'NODO_2_COCINA'),
-(9, 'INGRESO_PROVEEDOR', 120, 0, 120, 'Carga de stock inicial de apertura', 'NODO_2_COCINA'),
-(10, 'INGRESO_PROVEEDOR', 100, 0, 100, 'Carga de stock inicial de apertura', 'NODO_2_COCINA'),
-(11, 'INGRESO_PROVEEDOR', 60, 0, 60, 'Carga de stock inicial de apertura', 'NODO_2_COCINA'),
-(12, 'INGRESO_PROVEEDOR', 45, 0, 45, 'Carga de stock inicial de apertura', 'NODO_2_COCINA');
+INSERT INTO movimientos_stock (id_movimiento, id_producto, tipo_movimiento, cantidad, stock_previo, stock_posterior, motivo, nodo_origen) VALUES
+(1, 1, 'INGRESO_PROVEEDOR', 80, 0, 80, 'Carga de stock inicial de apertura', 'NODO_2_COCINA'),
+(2, 2, 'INGRESO_PROVEEDOR', 40, 0, 40, 'Carga de stock inicial de apertura', 'NODO_2_COCINA'),
+(3, 3, 'INGRESO_PROVEEDOR', 35, 0, 35, 'Carga de stock inicial de apertura', 'NODO_2_COCINA'),
+(4, 4, 'INGRESO_PROVEEDOR', 30, 0, 30, 'Carga de stock inicial de apertura', 'NODO_2_COCINA'),
+(5, 5, 'INGRESO_PROVEEDOR', 25, 0, 25, 'Carga de stock inicial de apertura', 'NODO_2_COCINA'),
+(6, 6, 'INGRESO_PROVEEDOR', 50, 0, 50, 'Carga de stock inicial de apertura', 'NODO_2_COCINA'),
+(7, 7, 'INGRESO_PROVEEDOR', 20, 0, 20, 'Carga de stock inicial de apertura', 'NODO_2_COCINA'),
+(8, 8, 'INGRESO_PROVEEDOR', 30, 0, 30, 'Carga de stock inicial de apertura', 'NODO_2_COCINA'),
+(9, 9, 'INGRESO_PROVEEDOR', 120, 0, 120, 'Carga de stock inicial de apertura', 'NODO_2_COCINA'),
+(10, 10, 'INGRESO_PROVEEDOR', 100, 0, 100, 'Carga de stock inicial de apertura', 'NODO_2_COCINA'),
+(11, 11, 'INGRESO_PROVEEDOR', 60, 0, 60, 'Carga de stock inicial de apertura', 'NODO_2_COCINA'),
+(12, 12, 'INGRESO_PROVEEDOR', 45, 0, 45, 'Carga de stock inicial de apertura', 'NODO_2_COCINA');
 
+SET TIMESTAMP = DEFAULT;
 SET sql_log_bin = 1;
