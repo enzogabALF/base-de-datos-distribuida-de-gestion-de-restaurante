@@ -1,0 +1,56 @@
+Prueba: prueba_switchover | Fecha: 2026-11-13 01:36:24 | Equipo: MINGW64_NT-10.0-26300
+
+==================================================================
+ SWITCHOVER: nodo1 SALE DE SERVICIO, nodo2 TOMA SU ÁREA
+==================================================================
+
+>> Precondiciones: contenedores sanos y replicación activa en ambos sentidos
+   [OK] nodos healthy, replicación IO/SQL corriendo, HAProxy y backup activos
+
+>> 1. Congelar escrituras en nodo1 (super_read_only = ON)
+   [OK] nodo1 en solo lectura: read_only=1, super_read_only=1
+
+>> 2. Esperar a que nodo2 tenga TODAS las transacciones de nodo1
+   [OK] nodo2 aplicó todo lo de nodo1 (GTID 99dda59e-df1b-11f1-9fb0-ca07629590b4:1-7,99e274d6-df1b-11f1-924b-fef11e418842:1-20)
+
+>> 3. Sacar nodo1 de HAProxy (estado MAINT) y cortar sus sesiones
+   [OK] área salon -> nodo2-cocina (corte de escrituras: 1.7 s)
+   HAProxy salon/nodo1: DOWN+MAINT
+   [OK] nodo1 fuera de servicio, listo para mantenimiento
+
+>> Durante el mantenimiento: el Salón sigue operando (contra el Nodo 2)
+   [OK] comanda #14 creada vía HAProxy en nodo2-cocina
+   Escritura directa al Nodo 1 congelado (debe fallar):
+      ERROR 1290 (HY000) at line 1: The MySQL server is running with the --read-only option so it cannot execute this statement
+
+>> Mantenimiento simulado: reinicio ordenado del Nodo 1 (docker restart)
+   [OK] Nodo 1 reiniciado
+
+==================================================================
+ SWITCHOVER DE REGRESO: nodo1 VUELVE A SU ÁREA
+==================================================================
+
+>> 1. Verificar que nodo1 esté sano y replicando
+   [OK] nodo1 healthy y replicando
+
+>> 2. Esperar a que nodo1 tenga todo lo que nodo2 escribió mientras no estaba
+   [OK] nodo1 al día (GTID 99dda59e-df1b-11f1-9fb0-ca07629590b4:1-8,99e274d6-df1b-11f1-924b-fef11e418842:1-20)
+
+>> 3. Habilitar escrituras en nodo1 y devolverlo a HAProxy
+   [OK] área salon -> nodo1-salon
+
+>> Consistencia final
+>> 3. Huella digital de cada tabla
+   TABLA                       NODO 1 (filas:huella)      NODO 2 (filas:huella)      RESULTADO
+   clientes                    5:DD678FAE7751C951         5:DD678FAE7751C951         IGUAL
+   comandas                    9:F285AB5447FD5899         9:F285AB5447FD5899         IGUAL
+   detalle_comanda             6:412A77FCB91CC71F         6:412A77FCB91CC71F         IGUAL
+   historial_estados_comanda   12:1BBFDB598FD1F41C        12:1BBFDB598FD1F41C        IGUAL
+   mesas                       10:3C67D3C83F1E1723        10:3C67D3C83F1E1723        IGUAL
+   movimientos_stock           14:C46844C6D22855E2        14:C46844C6D22855E2        IGUAL
+   pagos                       2:72F8FD6B19BB1360         2:72F8FD6B19BB1360         IGUAL
+   productos_menu              12:4E5D60BB53EF6917        12:4E5D60BB53EF6917        IGUAL
+
+   [OK] CONSISTENTE: las 8 tablas son idénticas en ambos nodos
+
+Resultado guardado en: pruebas_fase2/resultados/prueba_switchover_20261113_013624.txt

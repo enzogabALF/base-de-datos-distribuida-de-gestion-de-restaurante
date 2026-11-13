@@ -1,0 +1,53 @@
+Prueba: reconstruir_nodo2 | Fecha: 2026-11-13 01:48:06 | Equipo: MINGW64_NT-10.0-26300
+
+==================================================================
+ RECONSTRUCCIÓN DEL nodo2 DESDE EL NODO SOBREVIVIENTE
+==================================================================
+
+>> 1. Sacar el nodo2 de HAProxy (no debe atender clientes mientras se reconstruye)
+   [OK] salon/nodo2: DOWN+MAINT | cocina/nodo2: DOWN+MAINT
+
+>> Simulación: se destruye el disco del nodo2
+   [OK] ./nodo2/data eliminado (comandas en el sobreviviente: 8)
+
+>> 2. Levantar el nodo2 vacío (init/ crea esquema, semillas y usuarios)
+   [OK] nodo2 healthy, init/ terminado y servidor definitivo en marcha
+
+>> 3. Detener su replicación, borrar la base y limpiar su historial GTID
+   [OK] replicación detenida, base eliminada (sin registrar en el binlog), gtid_executed vacío
+   el sobreviviente conserva sus datos: 8 comandas
+
+>> 4. Siembra: copia consistente en caliente del nodo sobreviviente
+   [OK] siembra completa en 3.7 s
+   GTID sembrados: 51881bfe-df1d-11f1-9e9a-f68e19fbc20a:1-21,518d8f3d-df1d-11f1-89d2-da18aa9074f0:1-6
+
+>> 5. Reanudar la replicación (solo recibe lo posterior a la copia)
+   [OK] replicación bidireccional activa
+
+>> 6. Verificar consistencia antes de devolverlo al servicio
+>> 2. Convergencia de transacciones (GTID)
+   [OK] ambos nodos ejecutaron el mismo conjunto de transacciones
+   GTID Nodo 1: 51881bfe-df1d-11f1-9e9a-f68e19fbc20a:1-21,518d8f3d-df1d-11f1-89d2-da18aa9074f0:1-6
+   GTID Nodo 2: 51881bfe-df1d-11f1-9e9a-f68e19fbc20a:1-21,518d8f3d-df1d-11f1-89d2-da18aa9074f0:1-6
+
+>> 3. Huella digital de cada tabla
+   TABLA                       NODO 1 (filas:huella)      NODO 2 (filas:huella)      RESULTADO
+   clientes                    5:329627CE807AA31F         5:329627CE807AA31F         IGUAL
+   comandas                    8:9ECE751D8A0356B2         8:9ECE751D8A0356B2         IGUAL
+   detalle_comanda             6:412A77FCB91CC71F         6:412A77FCB91CC71F         IGUAL
+   historial_estados_comanda   11:F57590760523A4BD        11:F57590760523A4BD        IGUAL
+   mesas                       10:420A6ED721DA1A83        10:420A6ED721DA1A83        IGUAL
+   movimientos_stock           14:CEC872D6EE12BD04        14:CEC872D6EE12BD04        IGUAL
+   pagos                       2:356D20EE50D69A04         2:356D20EE50D69A04         IGUAL
+   productos_menu              12:B9963B053D3CE1D7        12:B9963B053D3CE1D7        IGUAL
+
+   [OK] CONSISTENTE: las 8 tablas son idénticas en ambos nodos
+   [OK] nodo2 devuelto a HAProxy -> salon/nodo2: UP | cocina/nodo2: UP
+
+==================================================================
+ RESUMEN
+==================================================================
+   Tiempo total de reconstrucción (RTO)         54.2 s
+   Datos perdidos (RPO)                          0 (copia en caliente del sobreviviente)
+
+Resultado guardado en: pruebas_fase2/resultados/reconstruir_nodo2_20261113_014806.txt

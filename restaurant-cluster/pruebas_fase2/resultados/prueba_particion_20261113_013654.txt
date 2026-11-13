@@ -1,0 +1,74 @@
+Prueba: prueba_particion | Fecha: 2026-11-13 01:36:54 | Equipo: MINGW64_NT-10.0-26300
+
+==================================================================
+ PRUEBA 3: PARTICIÓN DE RED ENTRE NODOS (TEOREMA CAP)
+==================================================================
+
+>> Precondiciones: contenedores sanos y replicación activa en ambos sentidos
+   [OK] nodos healthy, replicación IO/SQL corriendo, HAProxy y backup activos
+
+==================================================================
+ PARTE A: CADA ÁREA SIGUE OPERANDO DURANTE LA PARTICIÓN
+==================================================================
+
+>> 1. Se corta el enlace de replicación entre los nodos
+   [OK] Replica_IO_Running = No en ambos nodos: no se ven entre sí
+
+>> 2. Salón y Cocina siguen trabajando, cada uno en su nodo
+   [OK] Salón creó la comanda #15 en el Nodo 1 (3.2 s, espera el timeout semisincrónico)
+   [OK] Cocina creó la comanda #16 en el Nodo 2 (3.2 s)
+   Semisincronía -> Nodo 1: OFF | Nodo 2: OFF  (degradada a asíncrona: se eligió A sobre C)
+
+>> 3. Durante la partición los nodos difieren (consistencia eventual)
+   Nodo 1 ve la #16: 0 fila(s) | Nodo 2 ve la #15: 0 fila(s)
+
+>> 4. Se restablece el enlace
+   [OK] reconciliación por GTID en 3.7 s
+   Nodo 1 ve la #16: 1 fila(s) | Nodo 2 ve la #15: 1 fila(s)
+   IDs 15 (impar) y 16 (par): sin colisión de clave primaria pese a escribir en paralelo
+   [OK] CONSISTENTE: las 8 tablas son idénticas en ambos nodos
+
+==================================================================
+ PARTE B: CONFLICTO SOBRE LA MISMA FILA (LÍMITE DEL MULTI-PRIMARIO)
+==================================================================
+
+>> 1. Nueva partición. Las dos áreas cambian el estado de la MISMA mesa (#9)
+   Nodo 1 (Salón) dice: RESERVADA | Nodo 2 (Cocina) dice: OCUPADA
+
+>> 2. Se restablece el enlace: cada nodo aplica el cambio del otro
+   Nodo 1 ahora dice: OCUPADA | Nodo 2 ahora dice: RESERVADA
+   Los valores quedaron CRUZADOS y la replicación sigue en 'Yes': MySQL no lo detecta.
+
+>> 3. El verificador de consistencia sí lo detecta
+      mesas                       10:358443556C510DC2        10:B22D8DB421C0E5E0        DIFERENTE
+      [ERROR] INCONSISTENTE: 1 tablas difieren entre los nodos
+
+>> 4. Reparación según la regla de propiedad: las mesas son del Salón (Nodo 1)
+   Se reescribe el valor válido en el nodo dueño y la replicación lo propaga
+   Nodo 1: RESERVADA | Nodo 2: RESERVADA
+
+>> 5. Consistencia final
+>> 3. Huella digital de cada tabla
+   TABLA                       NODO 1 (filas:huella)      NODO 2 (filas:huella)      RESULTADO
+   clientes                    5:DD678FAE7751C951         5:DD678FAE7751C951         IGUAL
+   comandas                    11:BA4A1DE47EB31C54        11:BA4A1DE47EB31C54        IGUAL
+   detalle_comanda             6:412A77FCB91CC71F         6:412A77FCB91CC71F         IGUAL
+   historial_estados_comanda   12:1BBFDB598FD1F41C        12:1BBFDB598FD1F41C        IGUAL
+   mesas                       10:9FB5DA9CEC04B168        10:9FB5DA9CEC04B168        IGUAL
+   movimientos_stock           14:C46844C6D22855E2        14:C46844C6D22855E2        IGUAL
+   pagos                       2:72F8FD6B19BB1360         2:72F8FD6B19BB1360         IGUAL
+   productos_menu              12:4E5D60BB53EF6917        12:4E5D60BB53EF6917        IGUAL
+
+   [OK] CONSISTENTE: las 8 tablas son idénticas en ambos nodos
+
+==================================================================
+ CONCLUSIÓN
+==================================================================
+   - Ante una partición el clúster elige DISPONIBILIDAD (AP): ambas áreas siguen
+     trabajando y la semisincronía se degrada a asíncrona tras 3 s.
+   - Las altas no chocan gracias a los IDs impares/pares y se reconcilian solas.
+   - Las modificaciones concurrentes de una MISMA fila divergen sin aviso: por eso
+     cada tabla tiene un nodo dueño de sus escrituras (fragmentación funcional) y
+     la consistencia se audita con verificar_consistencia.sh.
+
+Resultado guardado en: pruebas_fase2/resultados/prueba_particion_20261113_013654.txt

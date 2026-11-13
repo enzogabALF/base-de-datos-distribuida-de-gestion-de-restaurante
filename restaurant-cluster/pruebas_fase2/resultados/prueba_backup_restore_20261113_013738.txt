@@ -1,0 +1,94 @@
+Prueba: prueba_backup_restore | Fecha: 2026-11-13 01:37:38 | Equipo: MINGW64_NT-10.0-26300
+
+==================================================================
+ PRUEBA 4: DESASTRE LÓGICO Y RECUPERACIÓN A UN PUNTO EN EL TIEMPO
+==================================================================
+
+>> Precondiciones: contenedores sanos y replicación activa en ambos sentidos
+   [OK] nodos healthy, replicación IO/SQL corriendo, HAProxy y backup activos
+
+>> 1. Backup COMPLETO
+   2026-11-13 01:37:40 [backup_full] iniciando backup COMPLETO desde nodo1 (172.28.0.11) -> cadenas/20261113_013740_nodo1
+   2026-11-13 01:37:40 [backup_full] backup COMPLETO OK: 8.0K, binlog inicial mysql-bin.000006, 0 s
+   pagos en producción: 2
+
+>> 2. Operación normal: el Salón cobra una comanda nueva -> backup INCREMENTAL
+   [OK] comanda #17 cobrada
+   2026-11-13 01:37:42 [backup_incremental] iniciando backup INCREMENTAL de nodo1 desde el binlog número 6
+   2026-11-13 01:37:42 [backup_incremental] backup INCREMENTAL OK: binlogs 6..6 (4.0K)
+
+>> 3. Operación normal: otra comanda cobrada -> backup DIFERENCIAL
+   [OK] comanda #19 cobrada
+   2026-11-13 01:37:42 [backup_diferencial] iniciando backup DIFERENCIAL de nodo1 desde el binlog número 6 (inicio de la cadena)
+   2026-11-13 01:37:43 [backup_diferencial] backup DIFERENCIAL OK: binlogs 6..7 (8.0K)
+   pagos antes del desastre: 4 (total $158400.00)
+
+>> 4. DESASTRE: se ejecuta por error DELETE FROM pagos en el Nodo 1
+   [OK] transacción dañina identificada por su GTID: 99e274d6-df1b-11f1-924b-fef11e418842:29 (2026-11-13 01:37:44)
+   pagos en Nodo 1: 0 | pagos en Nodo 2: 0
+   -> la replicación PROPAGÓ el error: la alta disponibilidad no reemplaza al respaldo.
+
+>> 5. La operación continúa: se abre una comanda legítima -> backup INCREMENTAL
+   [OK] comanda #21 creada DESPUÉS del desastre (no se debe perder al recuperar)
+   2026-11-13 01:37:46 [backup_incremental] iniciando backup INCREMENTAL de nodo1 desde el binlog número 8
+   2026-11-13 01:37:46 [backup_incremental] backup INCREMENTAL OK: binlogs 8..8 (4.0K)
+   Cadena actual: 20261113_013740_nodo1
+   
+   == 20261113_013740_nodo1  (24K)
+      COMPLETO     20261113_013740  binlog inicial mysql-bin.000006
+      DIFERENCIAL  20261113_013742  binlogs 6..7
+      INCREMENTAL  20261113_013742  binlogs 6..6
+      INCREMENTAL  20261113_013746  binlogs 8..8
+   
+
+>> 6. RESTAURACIÓN: completo + diferencial + incremental, excluyendo SOLO el GTID 99e274d6-df1b-11f1-924b-fef11e418842:29
+   2026-11-13 01:37:47 [restaurar] === RESTAURACIÓN de la cadena 20261113_013740_nodo1 (origen nodo1) ===
+   2026-11-13 01:37:47 [restaurar] checksum del completo OK
+   2026-11-13 01:37:47 [restaurar] usando diferencial_20261113_013742 (checksum OK)
+   2026-11-13 01:37:47 [restaurar] usando incremental_20261113_013746 (checksum OK)
+   2026-11-13 01:37:47 [restaurar] binlogs a reaplicar: 3
+   2026-11-13 01:37:52 [restaurar] completo cargado en 0 s
+   2026-11-13 01:37:52 [restaurar] PITR: se excluyen las transacciones 99e274d6-df1b-11f1-924b-fef11e418842:29
+   2026-11-13 01:37:52 [restaurar] binlogs reaplicados en 0 s
+   
+   TABLA                          RESTAURADO   PRODUCCION
+   ---------------------------- ------------ ------------
+   clientes                                5            5
+   comandas                               14           14
+   detalle_comanda                         6            6
+   historial_estados_comanda              12           12
+   mesas                                  10           10
+   movimientos_stock                      14           14
+   pagos                                   4            0  <- difiere
+   productos_menu                         12           12
+   
+   2026-11-13 01:37:52 [restaurar] GTID restaurados: 99dda59e-df1b-11f1-9fb0-ca07629590b4:1-10,99e274d6-df1b-11f1-924b-fef11e418842:1-28:30
+   2026-11-13 01:37:52 [restaurar] === RESTAURACIÓN OK en 5 s (RTO medido). Instancia disponible en 127.0.0.1:3309 (root / root_password_ae4) ===
+   [OK] instancia restaurada: 4 pagos (los de antes del error) y la comanda #21 posterior al error
+
+>> 7. Reinyección de los pagos recuperados en producción (Nodo 1, dueño de la caja)
+   [OK] pagos en Nodo 1: 4 | Nodo 2: 4 | total $158400.00 (igual que antes del desastre)
+
+>> 8. Consistencia final
+>> 3. Huella digital de cada tabla
+   TABLA                       NODO 1 (filas:huella)      NODO 2 (filas:huella)      RESULTADO
+   clientes                    5:DD678FAE7751C951         5:DD678FAE7751C951         IGUAL
+   comandas                    14:EED0164B3317C36A        14:EED0164B3317C36A        IGUAL
+   detalle_comanda             6:412A77FCB91CC71F         6:412A77FCB91CC71F         IGUAL
+   historial_estados_comanda   12:1BBFDB598FD1F41C        12:1BBFDB598FD1F41C        IGUAL
+   mesas                       10:9FB5DA9CEC04B168        10:9FB5DA9CEC04B168        IGUAL
+   movimientos_stock           14:C46844C6D22855E2        14:C46844C6D22855E2        IGUAL
+   pagos                       4:CBA9A4D301A6F311         4:CBA9A4D301A6F311         IGUAL
+   productos_menu              12:4E5D60BB53EF6917        12:4E5D60BB53EF6917        IGUAL
+
+   [OK] CONSISTENTE: las 8 tablas son idénticas en ambos nodos
+
+==================================================================
+ RESUMEN
+==================================================================
+   Pagos antes del desastre / borrados / recuperados       4 / 4 / 4
+   Trabajo legítimo posterior al error conservado         sí (comanda #21)
+   Tiempo de restauración verificada (instancia aislada)  5.7 s
+   Tiempo de reinyección en producción                   0.3 s
+
+Resultado guardado en: pruebas_fase2/resultados/prueba_backup_restore_20261113_013738.txt
