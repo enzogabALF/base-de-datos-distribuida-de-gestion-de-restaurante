@@ -99,7 +99,7 @@ Debes ver los cuatro contenedores activos:
 
 ## 4. ¿Cómo Realizar Cada Funcionalidad Implementada?
 
-El proyecto cuenta con tres scripts operativos en las carpetas `scripts_abm/` que puedes ejecutar completos por consola o por bloques desde MySQL Workbench.
+El proyecto cuenta con cuatro scripts operativos en las carpetas `scripts_abm/` que puedes ejecutar completos por consola o por bloques desde MySQL Workbench.
 
 ### A. Protocolo de Verificación Técnica y ABM del Nodo 1
 **Archivo:** `restaurant-cluster/nodo1/scripts_abm/verificacion_tecnica_nodo1.sql`
@@ -153,13 +153,40 @@ El proyecto cuenta con tres scripts operativos en las carpetas `scripts_abm/` qu
 **Funcionalidades incluidas:**
 * **Caso 1.A — Recepción de mercadería de proveedor (Alta de Stock):** Bloquea el producto con `SELECT ... FOR UPDATE`, registra el remito en `movimientos_stock` (`INGRESO_PROVEEDOR`) con el stock previo y posterior, y suma las unidades en `productos_menu`.
 * **Caso 1.B — Apertura de comanda interna en Cocina (ID Par):** Crea una orden de control de calidad desde Cocina (`NODO_2_COCINA`), demostrando que el Nodo 2 genera automáticamente un `id_comanda` **par** (`2, 4, 6...`).
-* **Caso 2.A — Marcha de comanda y descuento automático de stock:** Toma la comanda `#1` recibida desde el Salón, cambia su estado a `EN_PREPARACION`, pasa los platos pendientes a `EN_COCCION` y descuenta de `productos_menu` las cantidades consumidas.
+* **Caso 2.A — Marcha de comanda y descuento automático de stock:** Toma la comanda `#1` recibida desde el Salón, cambia su estado a `EN_PREPARACION`, pasa los platos pendientes a `EN_COCCION`, bloquea los productos con `FOR UPDATE`, registra en el Kardex un movimiento `VENTA_COMANDA` por producto (con stock previo y posterior) y descuenta de `productos_menu` las cantidades consumidas.
 * **Caso 2.B — Finalización y despacho a Salón:** Actualiza los ítems en cocción a `LISTO`, cambia la comanda a `LISTA_PARA_SERVIR` y registra el aviso de campana en `historial_estados_comanda`.
 * **Caso 3.A — Registro de merma o rotura (Baja de Stock):** Bloquea el producto con `FOR UPDATE`, asienta la pérdida en `movimientos_stock` (`MERMA_ROTURA` por pérdida de cadena de frío) y descuenta el inventario disponible.
 * **Sección 4 — Consultas de Cocina e Inventario:**
   * **Comandera digital:** Lista en orden de apertura todos los platos en estado `PENDIENTE` o `EN_COCCION` con sus especificaciones (`punto_coccion`, `apto_celiaco`, `sin_sal`).
   * **Semáforo de stock crítico:** Clasifica el inventario activo en `CRÍTICO: REPONER URGENTE` (`<= 15`), `ALERTA: STOCK BAJO` (`<= 30`) o `NORMAL`.
   * **Kardex de movimientos:** Historial completo de entradas, salidas y mermas de mercadería.
+
+---
+
+### D. Protocolo de Verificación Técnica del Nodo 2
+**Archivo:** `restaurant-cluster/nodo2/scripts_abm/verificacion_tecnica_nodo2.sql`
+
+**Cómo ejecutarlo por consola (contra el puerto `3308`):**
+```powershell
+& "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" -h 127.0.0.1 -P 3308 -u root -proot_password_ae4 --table -e "SOURCE restaurant-cluster/nodo2/scripts_abm/verificacion_tecnica_nodo2.sql"
+```
+
+**Funcionalidades que ejecuta paso a paso:**
+1. **Bloque 1:** Variables del Nodo 2 (`server_id = 2`, `offset = 2`, GTID, durabilidad) y un chequeo automático `configuracion_nodo2_ok = 1`.
+2. **Bloque 2:** Semisincronía (`rpl_semi_sync%`), `SHOW REPLICA STATUS` del enlace con el Nodo 1 y los GTID ejecutados.
+3. **Bloque 3:** Sentencias comentadas de las restricciones de stock (`3819` y `1452`).
+4. **Bloque 4:** Un ingreso de mercadería y una comanda interna con historial y detalle, y la comprobación de que las cuatro claves generadas son **pares**.
+5. **Bloque 5:** Resumen por tabla y nodo de origen (IDs pares e impares) y el chequeo `violaciones_ids_pares_nodo2 = 0`.
+
+### E. Pruebas Integradas entre Nodos (sin cliente MySQL instalado)
+Desde `restaurant-cluster/`, con Git Bash:
+
+```bash
+bash pruebas_fase1/prueba_flujo_cruzado.sh   # comanda abierta en el Salón, marchada en Cocina y cobrada en el Salón
+bash pruebas_fase1/prueba_restricciones.sh   # 17 violaciones de CHECK / UNIQUE / FOREIGN KEY rechazadas
+```
+
+Resultados y análisis en **[EVIDENCIA_PRUEBAS_DISTRIBUIDAS.md](EVIDENCIA_PRUEBAS_DISTRIBUIDAS.md)**.
 
 ---
 
@@ -217,3 +244,26 @@ Toda la documentación, la política de RPO/RTO y los resultados medidos están 
 | Cocina vía HAProxy | `3311` | Aplicación de Cocina (va al Nodo 2; si cae, al Nodo 1) |
 | Panel de HAProxy | `8404` | `http://localhost:8404` — estado de cada nodo en vivo |
 | Instancia de restauración | `3309` | Base restaurada por `restaurar.sh` (`root` / `root_password_ae4`) |
+
+---
+
+## 7. Fase 3: Tuning, Indexación, Particionamiento, Vistas Materializadas y KDD
+
+La Fase 3 carga 22 meses de historial (120.000 comandas, alrededor de 1 millón de filas), diagnostica los reportes con `EXPLAIN ANALYZE`, aplica la estrategia de índices y reescribe las consultas ineficientes. Además construye un data warehouse en estrella con tablas de hechos particionadas, cargado desde tres fuentes heterogéneas (base relacional, planilla Excel y log de texto del sistema de cocina), con una vista materializada que se refresca cada 15 minutos, análisis KDD y un tablero dimensional.
+
+Toda la fase se ejecuta con un solo comando (unos 10 minutos), que deja la salida completa en `pruebas_fase3/resultados/`:
+
+```bash
+cd restaurant-cluster
+bash pruebas_fase3/ejecutar_fase3.sh --desde-cero
+```
+
+Después, el tablero se abre con doble clic en `fase3/tablero/tablero.html`, y se puede regenerar en cualquier momento con `bash pruebas_fase3/generar_tablero.sh`.
+
+El diseño, las decisiones y los resultados medidos están en **[FASE3_TUNING_INDEXACION_PARTICIONAMIENTO.md](FASE3_TUNING_INDEXACION_PARTICIONAMIENTO.md)**.
+
+| Elemento | Dónde |
+| :--- | :--- |
+| Data warehouse | Esquema `restaurante_dw` en ambos nodos (se replica) |
+| Vista materializada | `restaurante_dw.mv_ventas_mensuales`, refrescada por el evento `ev_dw_actualizacion` |
+| Reportes de diagnóstico | `fase3/consultas/` (original y versión optimizada) |
