@@ -1,0 +1,76 @@
+Prueba: prueba_failover | Fecha: 2026-11-13 16:38:32 | Equipo: MINGW64_NT-10.0-26300
+
+==================================================================
+ PRUEBA 1: CAÍDA ABRUPTA DEL NODO 1 Y FAILOVER AUTOMÁTICO
+==================================================================
+
+>> Precondiciones: contenedores sanos y replicación activa en ambos sentidos
+   [OK] nodos healthy, replicación IO/SQL corriendo, HAProxy y backup activos
+
+>> 1. Ruteo inicial de HAProxy
+   [OK] Salón (puerto 3310) -> nodo1-salon
+   [OK] Cocina (puerto 3311) -> nodo2-cocina
+
+>> 2. El Salón abre una comanda justo antes de la caída
+   [OK] comanda #1240003 confirmada (COMMIT) en el Nodo 1 (ID impar)
+
+>> 3. CORTE DE ENERGÍA del Nodo 1 (docker kill = SIGKILL, sin apagado ordenado)
+   [OK] Nodo 1 detenido abruptamente a las 16:38:34
+
+>> 4. Esperando la conmutación automática de HAProxy
+   [OK] FAILOVER AUTOMÁTICO: el Salón ahora entra por nodo2-cocina, 8.5 s después de la caída
+   HAProxy salon/nodo1: DOWN | salon/nodo2 (backup): UP
+
+>> 5. RPO: ¿la comanda confirmada antes de la caída sobrevivió?
+   [OK] la comanda #1240003 está en el Nodo 2: RPO = 0 (ninguna transacción confirmada se perdió)
+
+>> 6. Disponibilidad: el Salón sigue operando contra el Nodo 2
+   [OK] comanda #1240004 creada en el Nodo 2 (ID par) mientras el Nodo 1 está caído
+   1.ª escritura: 3.2 s (espera el ACK del Nodo 1 hasta el timeout de 3 s)
+   2.ª escritura: 0.2 s (replicación ya degradada a asíncrona)
+   Rpl_semi_sync_master_status en Nodo 2: OFF  <- OFF = se priorizó disponibilidad (CAP: AP)
+
+>> 7. Se restablece la energía del Nodo 1
+   [OK] Nodo 1 healthy en 10.7 s
+   Registro del motor durante ESTE arranque (recuperación ante caída, WAL redo/undo):
+      2026-11-13T19:38:49.154602Z 1 [Note] [MY-013883] [InnoDB] The latest found checkpoint is at lsn = 1329234800 in redo log file ./#innodb_redo/#ib_redo405.
+      2026-11-13T19:38:49.156764Z 1 [Note] [MY-012560] [InnoDB] The log sequence number 29860072 in the system tablespace does not match the log sequence number 1329234800 in the redo log files!
+      2026-11-13T19:38:49.156795Z 1 [Note] [MY-012552] [InnoDB] Starting crash recovery.
+      2026-11-13T19:38:49.158897Z 1 [Note] [MY-013086] [InnoDB] Starting to parse redo log at lsn = 1329234458, whereas checkpoint_lsn = 1329234800 and start_lsn = 1329234432
+      2026-11-13T19:38:49.283509Z 1 [Note] [MY-012532] [InnoDB] Applying a batch of 22 redo log records ...
+      2026-11-13T19:38:55.215636Z 0 [System] [MY-010229] [Server] Starting XA crash recovery...
+      2026-11-13T19:38:55.226906Z 0 [Note] [MY-013911] [Server] Crash recovery finished in binlog engine. No attempts to commit, rollback or prepare any transactions.
+      2026-11-13T19:38:55.226955Z 0 [Note] [MY-013911] [Server] Crash recovery finished in InnoDB engine. No attempts to commit, rollback or prepare any transactions.
+      2026-11-13T19:38:55.226962Z 0 [System] [MY-010232] [Server] XA crash recovery finished.
+      2026-11-13T19:38:56.657561Z 0 [System] [MY-010931] [Server] /usr/sbin/mysqld: ready for connections. Version: '8.0.46'  socket: '/var/run/mysqld/mysqld.sock'  port: 3306  MySQL Community Server - GPL.
+
+>> 8. Resincronización por GTID (el Nodo 1 recibe lo escrito durante su caída)
+   [OK] Nodo 1 al día en 2.6 s: la comanda #1240004 ya está en el Nodo 1 (1 fila)
+   Rpl_semi_sync_master_status en Nodo 2: ON  <- vuelve a ON cuando el Nodo 1 confirma
+
+>> 9. Failback: el Salón vuelve a su nodo principal
+   [OK] Salón -> nodo1-salon otra vez (0.4 s desde que el Nodo 1 quedó al día)
+
+>> 10. Consistencia final
+>> 3. Huella digital de cada tabla
+   TABLA                       NODO 1 (filas:huella)      NODO 2 (filas:huella)      RESULTADO
+   clientes                    3005:591884AA751A317A      3005:591884AA751A317A      IGUAL
+   comandas                    120010:B22F209DCC3D04AE    120010:B22F209DCC3D04AE    IGUAL
+   detalle_comanda             310442:4D71E4F37EEDA1D8    310442:4D71E4F37EEDA1D8    IGUAL
+   historial_estados_comanda   470329:D89F494E8CE176F6    470329:D89F494E8CE176F6    IGUAL
+   mesas                       10:D3BA7C7BD31866DB        10:D3BA7C7BD31866DB        IGUAL
+   movimientos_stock           17:43C27A7CB4C5D3E1        17:43C27A7CB4C5D3E1        IGUAL
+   pagos                       115161:EC871382DCB98281    115161:EC871382DCB98281    IGUAL
+   productos_menu              12:CF064A11C1973B57        12:CF064A11C1973B57        IGUAL
+
+   [OK] CONSISTENTE: las 8 tablas son idénticas en ambos nodos
+
+==================================================================
+ RESUMEN
+==================================================================
+   Tiempo de conmutación automática (failover)        8.5 s
+   Transacciones confirmadas perdidas (RPO)             0
+   1.ª escritura con el otro nodo caído               3.2 s
+   Escrituras siguientes (modo asíncrono)              0.2 s
+
+Resultado guardado en: pruebas_fase2/resultados/prueba_failover_20261113_163832.txt

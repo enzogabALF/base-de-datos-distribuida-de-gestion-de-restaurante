@@ -1,0 +1,139 @@
+Prueba: prueba_restricciones | Fecha: 2026-11-13 15:02:42 | Equipo: MINGW64_NT-10.0-26300
+
+==================================================================
+ PRUEBA DE RESTRICCIONES DE INTEGRIDAD (CHECK, UNIQUE, FOREIGN KEY)
+==================================================================
+
+>> Precondiciones: contenedores sanos y replicación activa en ambos sentidos
+   [OK] nodos healthy, replicación IO/SQL corriendo, HAProxy y backup activos
+
+>> Foto de control antes de las pruebas
+   Filas por tabla + stock total, Nodo 1: 5,10,12,20,8,17,10,3,650
+   Filas por tabla + stock total, Nodo 2: 5,10,12,20,8,17,10,3,650
+   GTID Nodo 1: 4a2d19f1-df8c-11f1-9c98-b68dd51076da:1-8,4a30c633-df8c-11f1-b50c-ca6a603760e9:1-22
+
+>> A. Bloque 2 de verificacion_tecnica_nodo1.sql (Nodo 1 - Salón)
+
+   [1] 2.1 CHECK: precio negativo en el menú
+       SQL:       INSERT INTO productos_menu (nombre, categoria, precio, stock_disponible) VALUES ('Plato Inválido', 'ENTRADA', -500.00, 10) 
+       Respuesta: ERROR 3819 (HY000) at line 1: Check constraint 'productos_menu_chk_1' is violated.
+       [OK] rechazada con el error 3819 esperado
+
+   [2] 2.2 CHECK: cantidad 0 en una línea de comanda
+       SQL:       INSERT INTO detalle_comanda (id_comanda, id_producto, cantidad, precio_unitario) VALUES (1, 1, 0, 1000.00) 
+       Respuesta: ERROR 3819 (HY000) at line 1: Check constraint 'detalle_comanda_chk_1' is violated.
+       [OK] rechazada con el error 3819 esperado
+
+   [3] 2.3 UNIQUE: número de mesa duplicado
+       SQL:       INSERT INTO mesas (numero_mesa, capacidad, sector) VALUES (1, 4, 'Salón Principal') 
+       Respuesta: ERROR 1062 (23000) at line 1: Duplicate entry '1' for key 'mesas.numero_mesa'
+       [OK] rechazada con el error 1062 esperado
+
+>> B. Casos adicionales de integridad (Nodo 1 - Salón)
+
+   [4] UNIQUE: CUIT/DNI de cliente duplicado
+       SQL:       INSERT INTO clientes (nombre_completo, cuit_dni) VALUES ('Cliente Duplicado', '20-34567890-9') 
+       Respuesta: ERROR 1062 (23000) at line 1: Duplicate entry '20-34567890-9' for key 'clientes.cuit_dni'
+       [OK] rechazada con el error 1062 esperado
+
+   [5] UNIQUE: segundo pago para una comanda ya cobrada (no se cobra dos veces)
+       SQL:       INSERT INTO pagos (id_comanda, metodo_pago, monto_total) VALUES (1, 'EFECTIVO', 100.00) 
+       Respuesta: ERROR 1062 (23000) at line 1: Duplicate entry '1' for key 'pagos.id_comanda'
+       [OK] rechazada con el error 1062 esperado
+
+   [6] CHECK: pago con monto cero
+       SQL:       INSERT INTO pagos (id_comanda, metodo_pago, monto_total) VALUES (1, 'EFECTIVO', 0) 
+       Respuesta: ERROR 3819 (HY000) at line 1: Check constraint 'pagos_chk_1' is violated.
+       [OK] rechazada con el error 3819 esperado
+
+   [7] CHECK: mesa con capacidad 0
+       SQL:       INSERT INTO mesas (numero_mesa, capacidad) VALUES (99, 0) 
+       Respuesta: ERROR 3819 (HY000) at line 1: Check constraint 'mesas_chk_1' is violated.
+       [OK] rechazada con el error 3819 esperado
+
+   [8] FOREIGN KEY: comanda para una mesa inexistente
+       SQL:       INSERT INTO comandas (id_mesa, mozo) VALUES (999, 'Mozo de prueba') 
+       Respuesta: ERROR 1452 (23000) at line 1: Cannot add or update a child row: a foreign key constraint fails (`restaurante_db`.`comandas`, CONSTRAINT `fk_comanda_mesa` FOREIGN KEY (`id_mesa`) REFERENCES `mesas` (`id_mesa`) ON DELETE RESTRICT ON UPDATE CASCADE)
+       [OK] rechazada con el error 1452 esperado
+
+   [9] FOREIGN KEY: línea de comanda con un producto inexistente
+       SQL:       INSERT INTO detalle_comanda (id_comanda, id_producto, cantidad, precio_unitario) VALUES (1, 999, 1, 1000.00) 
+       Respuesta: ERROR 1452 (23000) at line 1: Cannot add or update a child row: a foreign key constraint fails (`restaurante_db`.`detalle_comanda`, CONSTRAINT `fk_detalle_producto` FOREIGN KEY (`id_producto`) REFERENCES `productos_menu` (`id_producto`) ON DELETE RESTRICT ON UPDATE CASCADE)
+       [OK] rechazada con el error 1452 esperado
+
+   [10] FOREIGN KEY ON DELETE RESTRICT: borrar una mesa con comandas
+       SQL:       DELETE FROM mesas WHERE id_mesa = (SELECT id_mesa FROM comandas WHERE id_comanda = 1) 
+       Respuesta: ERROR 1451 (23000) at line 1: Cannot delete or update a parent row: a foreign key constraint fails (`restaurante_db`.`comandas`, CONSTRAINT `fk_comanda_mesa` FOREIGN KEY (`id_mesa`) REFERENCES `mesas` (`id_mesa`) ON DELETE RESTRICT ON UPDATE CASCADE)
+       [OK] rechazada con el error 1451 esperado
+
+   [11] FOREIGN KEY ON DELETE RESTRICT: borrar una comanda que tiene pago
+       SQL:       DELETE FROM comandas WHERE id_comanda = 1 
+       Respuesta: ERROR 1451 (23000) at line 1: Cannot delete or update a parent row: a foreign key constraint fails (`restaurante_db`.`pagos`, CONSTRAINT `fk_pago_comanda` FOREIGN KEY (`id_comanda`) REFERENCES `comandas` (`id_comanda`) ON DELETE RESTRICT ON UPDATE CASCADE)
+       [OK] rechazada con el error 1451 esperado
+
+   [12] ENUM: estado de comanda inexistente (modo estricto)
+       SQL:       UPDATE comandas SET estado = 'VOLANDO' WHERE id_comanda = 1 
+       Respuesta: ERROR 1265 (01000) at line 1: Data truncated for column 'estado' at row 1
+       [OK] rechazada con el error 1265 esperado
+
+   [13] Columna generada: no se puede escribir el subtotal a mano
+       SQL:       INSERT INTO detalle_comanda (id_comanda, id_producto, cantidad, precio_unitario, subtotal) VALUES (1, 1, 1, 1000.00, 5.00) 
+       Respuesta: ERROR 3105 (HY000) at line 1: The value specified for generated column 'subtotal' in table 'detalle_comanda' is not allowed.
+       [OK] rechazada con el error 3105 esperado
+
+>> C. Bloque 3 de verificacion_tecnica_nodo2.sql (Nodo 2 - Cocina / Stock)
+
+   [14] 3.1 CHECK: stock disponible negativo
+       SQL:       UPDATE productos_menu SET stock_disponible = -1 WHERE id_producto = 8 
+       Respuesta: ERROR 3819 (HY000) at line 1: Check constraint 'productos_menu_chk_2' is violated.
+       [OK] rechazada con el error 3819 esperado
+
+   [15] 3.2 CHECK: movimiento de stock que deja stock_posterior negativo
+       SQL:       INSERT INTO movimientos_stock (id_producto, tipo_movimiento, cantidad, stock_previo, stock_posterior, nodo_origen) VALUES (8, 'MERMA_ROTURA', 500, 30, -470, 'NODO_2_COCINA') 
+       Respuesta: ERROR 3819 (HY000) at line 1: Check constraint 'movimientos_stock_chk_2' is violated.
+       [OK] rechazada con el error 3819 esperado
+
+   [16] 3.3 FOREIGN KEY: movimiento de stock de un producto inexistente
+       SQL:       INSERT INTO movimientos_stock (id_producto, tipo_movimiento, cantidad, stock_previo, stock_posterior, nodo_origen) VALUES (999, 'INGRESO_PROVEEDOR', 10, 0, 10, 'NODO_2_COCINA') 
+       Respuesta: ERROR 1452 (23000) at line 1: Cannot add or update a child row: a foreign key constraint fails (`restaurante_db`.`movimientos_stock`, CONSTRAINT `fk_mov_producto` FOREIGN KEY (`id_producto`) REFERENCES `productos_menu` (`id_producto`) ON DELETE RESTRICT ON UPDATE CASCADE)
+       [OK] rechazada con el error 1452 esperado
+
+   [17] FOREIGN KEY ON DELETE RESTRICT: borrar un producto con historial de stock
+       SQL:       DELETE FROM productos_menu WHERE id_producto = 3 
+       Respuesta: ERROR 1451 (23000) at line 1: Cannot delete or update a parent row: a foreign key constraint fails (`restaurante_db`.`detalle_comanda`, CONSTRAINT `fk_detalle_producto` FOREIGN KEY (`id_producto`) REFERENCES `productos_menu` (`id_producto`) ON DELETE RESTRICT ON UPDATE CASCADE)
+       [OK] rechazada con el error 1451 esperado
+
+>> D. Efecto sobre los datos y la replicación
+   [OK] ninguna fila inválida quedó guardada (conteos y stock total sin cambios en ambos nodos)
+   [OK] las sentencias rechazadas no generaron GTID: nunca llegaron al binary log ni al otro nodo
+   [OK] la replicación sigue corriendo en ambos sentidos (IO=Yes, SQL=Yes)
+
+==================================================================
+ RESULTADO: 17 de 17 violaciones rechazadas con el error esperado
+==================================================================
+
+==================================================================
+ VERIFICACIÓN DE CONSISTENCIA NODO 1 <-> NODO 2
+==================================================================
+
+>> 1. Hilos de replicación
+   [OK] restaurante_nodo1_salon: Replica_IO_Running=Yes, Replica_SQL_Running=Yes
+   [OK] restaurante_nodo2_cocina: Replica_IO_Running=Yes, Replica_SQL_Running=Yes
+
+>> 2. Convergencia de transacciones (GTID)
+   [OK] ambos nodos ejecutaron el mismo conjunto de transacciones
+   GTID Nodo 1: 4a2d19f1-df8c-11f1-9c98-b68dd51076da:1-8,4a30c633-df8c-11f1-b50c-ca6a603760e9:1-22
+   GTID Nodo 2: 4a2d19f1-df8c-11f1-9c98-b68dd51076da:1-8,4a30c633-df8c-11f1-b50c-ca6a603760e9:1-22
+
+>> 3. Huella digital de cada tabla
+   TABLA                       NODO 1 (filas:huella)      NODO 2 (filas:huella)      RESULTADO
+   clientes                    5:22020F52FB0D053C         5:22020F52FB0D053C         IGUAL
+   comandas                    8:A572B3AD07ABA0FC         8:A572B3AD07ABA0FC         IGUAL
+   detalle_comanda             10:9BC5D306BCF86795        10:9BC5D306BCF86795        IGUAL
+   historial_estados_comanda   17:35A15D5F7C4C8D3C        17:35A15D5F7C4C8D3C        IGUAL
+   mesas                       10:2E56B773BA4BF87B        10:2E56B773BA4BF87B        IGUAL
+   movimientos_stock           20:9FAC8569C1BCB2FD        20:9FAC8569C1BCB2FD        IGUAL
+   pagos                       3:990489C9E78E4DAD         3:990489C9E78E4DAD         IGUAL
+   productos_menu              12:01EF57E90E1C8DC4        12:01EF57E90E1C8DC4        IGUAL
+
+   [OK] CONSISTENTE: las 8 tablas son idénticas en ambos nodos

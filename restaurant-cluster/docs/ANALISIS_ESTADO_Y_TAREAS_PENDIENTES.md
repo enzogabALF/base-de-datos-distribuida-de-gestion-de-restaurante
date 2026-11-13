@@ -91,8 +91,17 @@ A partir de la auditoría técnica de los scripts SQL actuales, se identificaron
 
 ## 3. Checklist Resumen para el Compañero
 
-- [ ] **1.** Agregar `id_cliente` (`1..4`) e `id_mesa` (`1..10`) explícitos en `nodo1/init/04_seed_catalogos.sql` y `nodo2/init/04_seed_catalogos.sql`.
-- [ ] **2.** Reiniciar limpio el clúster (borrando `nodo1/data/*` y `nodo2/data/*`) y validar que `verificacion_tecnica_nodo1.sql` y `abm_salon.sql` corran de principio a fin sin errores de Foreign Key ni rotura de replicación en `SHOW SLAVE STATUS`.
-- [ ] **3.** Crear `nodo2/scripts_abm/verificacion_tecnica_nodo2.sql` validando IDs pares (`MOD(id, 2) = 0`) y estado semisync del Nodo 2.
-- [ ] **4.** Agregar el `INSERT INTO movimientos_stock` (`VENTA_COMANDA`) en el Caso 2.A de `nodo2/scripts_abm/abm_cocina.sql`.
-- [ ] **5.** Ejecutar y documentar la prueba cruzada Nodo 1 ↔ Nodo 2 y la prueba de caída/recuperación de un nodo (`failover`).
+- [x] **1.** Agregar `id_cliente` (`1..4`) e `id_mesa` (`1..10`) explícitos en `nodo1/init/04_seed_catalogos.sql` y `nodo2/init/04_seed_catalogos.sql`.
+- [x] **2.** Reiniciar limpio el clúster (borrando `nodo1/data/*` y `nodo2/data/*`) y validar que `verificacion_tecnica_nodo1.sql` y `abm_salon.sql` corran de principio a fin sin errores de Foreign Key ni rotura de replicación en `SHOW SLAVE STATUS`.
+- [x] **3.** Crear `nodo2/scripts_abm/verificacion_tecnica_nodo2.sql` validando IDs pares (`MOD(id, 2) = 0`) y estado semisync del Nodo 2.
+- [x] **4.** Agregar el `INSERT INTO movimientos_stock` (`VENTA_COMANDA`) en el Caso 2.A de `nodo2/scripts_abm/abm_cocina.sql`.
+- [x] **5.** Ejecutar y documentar la prueba cruzada Nodo 1 ↔ Nodo 2 y la prueba de caída/recuperación de un nodo (`failover`).
+
+### Estado al 13/11/2026: tareas completadas
+
+| Tarea | Dónde quedó |
+| :--- | :--- |
+| 1 y 2 | `04_seed_catalogos.sql` con IDs explícitos y reloj fijo. El reinicio limpio se automatizó en `pruebas_fase2/reiniciar_entorno.sh`, que ejecuta todos los scripts de ABM y verifica la consistencia. Además se corrigió la codificación de los acentos con `SET NAMES utf8mb4`. Detalle en `FASE2_RESILIENCIA_Y_BACKUPS.md`, sección 6.1, y en `EVIDENCIA_PRUEBAS_DISTRIBUIDAS.md`, sección 4. |
+| 3 | `nodo2/scripts_abm/verificacion_tecnica_nodo2.sql` (configuración, semisync, réplica, altas con IDs pares y chequeo automático de violaciones). |
+| 4 | Caso 2.A de `abm_cocina.sql`: movimiento `VENTA_COMANDA` con bloqueo `FOR UPDATE` y agrupado por producto. |
+| 5 | `pruebas_fase1/prueba_flujo_cruzado.sh`, `pruebas_fase1/prueba_restricciones.sh` (17/17 errores esperados) y `pruebas_fase2/prueba_failover.sh`. Evidencia en `EVIDENCIA_PRUEBAS_DISTRIBUIDAS.md`. |

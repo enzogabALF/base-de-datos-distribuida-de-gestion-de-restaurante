@@ -1,0 +1,116 @@
+Prueba: prueba_flujo_cruzado | Fecha: 2026-11-13 15:02:29 | Equipo: MINGW64_NT-10.0-26300
+
+==================================================================
+ PRUEBA INTEGRADA: FLUJO CRUZADO SALÓN (NODO 1) <-> COCINA (NODO 2)
+==================================================================
+
+>> Precondiciones: contenedores sanos y replicación activa en ambos sentidos
+   [OK] nodos healthy, replicación IO/SQL corriendo, HAProxy y backup activos
+
+>> Stock inicial de los productos que se van a pedir (Nodo 2, dueño del stock)
+   +-------------+--------------------------------------+------------------+
+   | id_producto | nombre                               | stock_disponible |
+   +-------------+--------------------------------------+------------------+
+   |           2 | Provoleta a la Parrilla con Orégano  |               40 |
+   |           4 | Ojo de Bife con Papas Rústicas       |               30 |
+   |          12 | Vino Malbec Reserva 750ml            |               51 |
+   +-------------+--------------------------------------+------------------+
+
+>> 1. SALÓN (Nodo 1, nodo1-salon): apertura de la comanda de la mesa 6
+   [OK] comanda #13 abierta en el Nodo 1 (ID IMPAR), total $75400.00
+
+>> 2. COCINA (Nodo 2): la comanda aparece en la comandera
+   [OK] la comanda #13 es visible en el Nodo 2 a los 228 ms
+   Comandera digital de Cocina (Consulta 4.1 de abm_cocina.sql) en el Nodo 2:
+   +------------+--------------+-------------------+------+--------------------------------------+----------+---------------+---------------+---------+------------------------+
+   | id_comanda | nodo_origen  | mozo              | mesa | plato                                | cantidad | estado_cocina | punto_coccion | sin_sal | observaciones          |
+   +------------+--------------+-------------------+------+--------------------------------------+----------+---------------+---------------+---------+------------------------+
+   |         13 | NODO_1_SALON | Lucía Fernández   |    6 | Provoleta a la Parrilla con Orégano  |        1 | PENDIENTE     | NO_APLICA     |       0 | Para compartir         |
+   |         13 | NODO_1_SALON | Lucía Fernández   |    6 | Ojo de Bife con Papas Rústicas       |        2 | PENDIENTE     | A_PUNTO       |       1 | Uno de los dos sin sal |
+   +------------+--------------+-------------------+------+--------------------------------------+----------+---------------+---------------+---------+------------------------+
+
+>> 3. COCINA (Nodo 2, nodo2-cocina): marcha de la comanda y descuento de stock (Caso 2.A)
+   [OK] comanda #13 en EN_PREPARACION; platos en EN_COCCION
+   Kardex: movimientos VENTA_COMANDA generados por la Cocina (IDs pares):
+   +---------------+-------------+-----------------+----------+--------------+-----------------+-----------------------+
+   | id_movimiento | id_producto | tipo_movimiento | cantidad | stock_previo | stock_posterior | motivo                |
+   +---------------+-------------+-----------------+----------+--------------+-----------------+-----------------------+
+   |            26 |           2 | VENTA_COMANDA   |        1 |           40 |              39 | Marcha de comanda #13 |
+   |            28 |           4 | VENTA_COMANDA   |        2 |           30 |              28 | Marcha de comanda #13 |
+   |            30 |          12 | VENTA_COMANDA   |        1 |           51 |              50 | Marcha de comanda #13 |
+   +---------------+-------------+-----------------+----------+--------------+-----------------+-----------------------+
+
+>> 4. COCINA (Nodo 2): platos terminados, campana de despacho (Caso 2.B)
+   [OK] comanda #13 en LISTA_PARA_SERVIR (Nodo 2)
+
+>> 5. SALÓN (Nodo 1): el mozo ve la comanda lista, la entrega y la cobra
+   [OK] el Nodo 1 ve la comanda #13 LISTA_PARA_SERVIR a los 215 ms
+   [OK] comanda #13 PAGADA en el Nodo 1; mesa 6 LIBRE; puntos del cliente: 50 -> 200
+
+>> 6. COCINA (Nodo 2): recibe el cierre de la comanda
+   [OK] el Nodo 2 ve la comanda #13 PAGADA a los 227 ms
+   [OK] el pago de $75400.00 está en el Nodo 2
+
+>> 7. Trazabilidad de la comanda #13 vista desde cada nodo
+   Historial en el Nodo 1 (IDs impares = Salón, pares = Cocina):
+   +--------------+---------+-------------------+-------------------+-------------------+---------------+
+   | id_historial | paridad | estado_anterior   | estado_nuevo      | operador          | nodo_emisor   |
+   +--------------+---------+-------------------+-------------------+-------------------+---------------+
+   |           23 | IMPAR   | NULL              | ABIERTA           | Lucía Fernández   | NODO_1_SALON  |
+   |           24 | PAR     | ABIERTA           | EN_PREPARACION    | Jefe de Partida   | NODO_2_COCINA |
+   |           26 | PAR     | EN_PREPARACION    | LISTA_PARA_SERVIR | Despachador       | NODO_2_COCINA |
+   |           27 | IMPAR   | LISTA_PARA_SERVIR | ENTREGADA         | Lucía Fernández   | NODO_1_SALON  |
+   |           29 | IMPAR   | ENTREGADA         | PAGADA            | Cajero Salón 1    | NODO_1_SALON  |
+   +--------------+---------+-------------------+-------------------+-------------------+---------------+
+   Historial en el Nodo 2 (debe ser idéntico):
+   +--------------+---------+-------------------+-------------------+-------------------+---------------+
+   | id_historial | paridad | estado_anterior   | estado_nuevo      | operador          | nodo_emisor   |
+   +--------------+---------+-------------------+-------------------+-------------------+---------------+
+   |           23 | IMPAR   | NULL              | ABIERTA           | Lucía Fernández   | NODO_1_SALON  |
+   |           24 | PAR     | ABIERTA           | EN_PREPARACION    | Jefe de Partida   | NODO_2_COCINA |
+   |           26 | PAR     | EN_PREPARACION    | LISTA_PARA_SERVIR | Despachador       | NODO_2_COCINA |
+   |           27 | IMPAR   | LISTA_PARA_SERVIR | ENTREGADA         | Lucía Fernández   | NODO_1_SALON  |
+   |           29 | IMPAR   | ENTREGADA         | PAGADA            | Cajero Salón 1    | NODO_1_SALON  |
+   +--------------+---------+-------------------+-------------------+-------------------+---------------+
+   [OK] cada nodo generó claves solo de su paridad: no hubo colisiones
+   Stock final en ambos nodos (antes: 40,30,51 para los productos 2, 4 y 12):
+   +--------+--------------+
+   | nodo   | stock_2_4_12 |
+   +--------+--------------+
+   | Nodo 1 | 39,28,50     |
+   +--------+--------------+
+   +--------+--------------+
+   | nodo   | stock_2_4_12 |
+   +--------+--------------+
+   | Nodo 2 | 39,28,50     |
+   +--------+--------------+
+
+==================================================================
+ RESULTADO: flujo cruzado completo sin errores (comanda #13, total $75400.00)
+==================================================================
+
+==================================================================
+ VERIFICACIÓN DE CONSISTENCIA NODO 1 <-> NODO 2
+==================================================================
+
+>> 1. Hilos de replicación
+   [OK] restaurante_nodo1_salon: Replica_IO_Running=Yes, Replica_SQL_Running=Yes
+   [OK] restaurante_nodo2_cocina: Replica_IO_Running=Yes, Replica_SQL_Running=Yes
+
+>> 2. Convergencia de transacciones (GTID)
+   [OK] ambos nodos ejecutaron el mismo conjunto de transacciones
+   GTID Nodo 1: 4a2d19f1-df8c-11f1-9c98-b68dd51076da:1-8,4a30c633-df8c-11f1-b50c-ca6a603760e9:1-22
+   GTID Nodo 2: 4a2d19f1-df8c-11f1-9c98-b68dd51076da:1-8,4a30c633-df8c-11f1-b50c-ca6a603760e9:1-22
+
+>> 3. Huella digital de cada tabla
+   TABLA                       NODO 1 (filas:huella)      NODO 2 (filas:huella)      RESULTADO
+   clientes                    5:22020F52FB0D053C         5:22020F52FB0D053C         IGUAL
+   comandas                    8:A572B3AD07ABA0FC         8:A572B3AD07ABA0FC         IGUAL
+   detalle_comanda             10:9BC5D306BCF86795        10:9BC5D306BCF86795        IGUAL
+   historial_estados_comanda   17:35A15D5F7C4C8D3C        17:35A15D5F7C4C8D3C        IGUAL
+   mesas                       10:2E56B773BA4BF87B        10:2E56B773BA4BF87B        IGUAL
+   movimientos_stock           20:9FAC8569C1BCB2FD        20:9FAC8569C1BCB2FD        IGUAL
+   pagos                       3:990489C9E78E4DAD         3:990489C9E78E4DAD         IGUAL
+   productos_menu              12:01EF57E90E1C8DC4        12:01EF57E90E1C8DC4        IGUAL
+
+   [OK] CONSISTENTE: las 8 tablas son idénticas en ambos nodos
