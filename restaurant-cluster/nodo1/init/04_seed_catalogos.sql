@@ -3,6 +3,11 @@
 -- Inicialización de datos maestros compartidos: Mesas, Menú, Clientes y Stock Base
 -- ============================================================================
 
+-- El entrypoint de Docker ejecuta este archivo con el cliente mysql sin LANG definido,
+-- que por defecto interpreta el texto como latin1 y guardaba los acentos con doble
+-- codificación ("SalÃ³n"). SET NAMES declara que el archivo está en UTF-8.
+SET NAMES utf8mb4;
+
 SET sql_log_bin = 0;
 
 USE restaurante_db;
