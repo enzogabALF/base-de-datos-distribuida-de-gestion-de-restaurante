@@ -3,3 +3,6 @@ nodo1/data/
 nodo2/data/
 *.log
 .env
+
+# Respaldos generados por el servicio de backup (Fase 2)
+backups/

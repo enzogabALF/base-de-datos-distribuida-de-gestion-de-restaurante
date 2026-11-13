@@ -26,6 +26,8 @@ services:
       - --enforce-gtid-consistency=ON
       - --innodb-flush-log-at-trx-commit=1
       - --sync-binlog=1
+      # Fase 2: nivel 3 (Note) para que el log muestre la recuperación ante caída de InnoDB (redo/undo)
+      - --log-error-verbosity=3
       - --plugin-load-add=semisync_master.so
       - --plugin-load-add=semisync_slave.so
       - --loose-rpl-semi-sync-master-enabled=1
@@ -72,6 +74,8 @@ services:
       - --enforce-gtid-consistency=ON
       - --innodb-flush-log-at-trx-commit=1
       - --sync-binlog=1
+      # Fase 2: nivel 3 (Note) para que el log muestre la recuperación ante caída de InnoDB (redo/undo)
+      - --log-error-verbosity=3
       - --plugin-load-add=semisync_master.so
       - --plugin-load-add=semisync_slave.so
       - --loose-rpl-semi-sync-master-enabled=1
@@ -90,6 +94,63 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # ---------------------------------------------------------------------------
+  # FASE 2 - Conmutación por error automática (failover).
+  # Las aplicaciones se conectan a HAProxy y no a un nodo fijo:
+  #   3310 = Salón/Caja (Nodo 1, respaldo Nodo 2)
+  #   3311 = Cocina/Stock (Nodo 2, respaldo Nodo 1)
+  #   8404 = panel web de estado (http://localhost:8404)
+  # ---------------------------------------------------------------------------
+  haproxy:
+    image: haproxy:2.8-alpine
+    container_name: restaurante_haproxy
+    hostname: haproxy
+    restart: unless-stopped
+    depends_on:
+      - mysql-nodo1
+      - mysql-nodo2
+    ports:
+      - "3310:3310"
+      - "3311:3311"
+      - "8404:8404"
+    volumes:
+      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      restaurante_net:
+        ipv4_address: 172.28.0.20
+
+  # ---------------------------------------------------------------------------
+  # FASE 2 - Respaldos automáticos (completo / diferencial / incremental) y
+  # restauración verificada en una instancia aislada (puerto 3309).
+  # Los respaldos quedan en ./backups (fuera del control de versiones).
+  # ---------------------------------------------------------------------------
+  backup:
+    build: ./backup
+    image: restaurante-backup:8.0.46
+    container_name: restaurante_backup
+    hostname: backup
+    restart: unless-stopped
+    depends_on:
+      - mysql-nodo1
+      - mysql-nodo2
+    environment:
+      TZ: America/Argentina/Buenos_Aires
+      BACKUP_USER: backup_user
+      BACKUP_PASSWORD: backup_password_ae4
+      NODOS: "nodo1:172.28.0.11 nodo2:172.28.0.12"
+      FULL_CADA_MIN: "1440"
+      DIFERENCIAL_CADA_MIN: "360"
+      INCREMENTAL_CADA_MIN: "15"
+      RETENCION_DIAS: "7"
+    ports:
+      - "3309:3309"
+    volumes:
+      - ./backup/scripts:/opt/backup:ro
+      - ./backups:/backups
+    networks:
+      restaurante_net:
+        ipv4_address: 172.28.0.30
 
 networks:
   restaurante_net:

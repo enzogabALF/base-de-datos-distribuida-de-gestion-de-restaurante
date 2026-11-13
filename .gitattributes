@@ -1,0 +1,5 @@
+# Los scripts de shell y la configuración de HAProxy se ejecutan dentro de
+# contenedores Linux: deben conservar finales de línea LF aunque se clonen en Windows.
+*.sh text eol=lf
+*.cfg text eol=lf
+Dockerfile text eol=lf
