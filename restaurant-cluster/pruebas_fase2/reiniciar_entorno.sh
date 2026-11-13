@@ -45,6 +45,8 @@ ok "abm_salon.sql (Nodo 1)"
 sleep 1
 docker exec -i "$N2" "${M[@]}" < nodo2/scripts_abm/abm_cocina.sql > /dev/null 2>&1 || falla "abm_cocina.sql"
 ok "abm_cocina.sql (Nodo 2)"
+docker exec -i "$N2" "${M[@]}" < nodo2/scripts_abm/verificacion_tecnica_nodo2.sql > /dev/null 2>&1 || falla "verificacion_tecnica_nodo2.sql"
+ok "verificacion_tecnica_nodo2.sql (Nodo 2)"
 
 paso "5. Esperando que HAProxy detecte ambos nodos"
 for _ in $(seq 1 30); do

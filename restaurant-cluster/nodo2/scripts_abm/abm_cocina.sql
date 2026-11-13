@@ -154,11 +154,52 @@ WHERE id_comanda = @comanda_a_marchar
   AND estado_cocina = 'PENDIENTE'
   AND id_producto IN (SELECT id_producto FROM productos_menu WHERE categoria IN ('ENTRADA', 'PLATO_PRINCIPAL', 'POSTRE'));
 
--- Descontar del stock disponible de cada producto preparado
+-- Bloqueo pesimista de los productos de la comanda (igual que en el Caso 1.A):
+-- nadie puede modificar ese stock hasta el COMMIT, así stock_previo es exacto.
+SELECT p.id_producto, p.stock_disponible
+FROM productos_menu p
+WHERE p.id_producto IN (SELECT id_producto FROM detalle_comanda WHERE id_comanda = @comanda_a_marchar)
+FOR UPDATE;
+
+-- Registrar en el Kardex (movimientos_stock) la salida por venta, ANTES de descontar,
+-- para que stock_previo refleje el valor anterior. Se agrupa por producto: si la comanda
+-- tiene dos líneas del mismo plato, se registra un único movimiento con la suma.
+INSERT INTO movimientos_stock (
+    id_producto,
+    tipo_movimiento,
+    cantidad,
+    stock_previo,
+    stock_posterior,
+    motivo,
+    nodo_origen
+)
+SELECT
+    p.id_producto,
+    'VENTA_COMANDA',
+    v.cantidad_total,
+    p.stock_disponible,
+    p.stock_disponible - v.cantidad_total,  -- el CHECK (stock_posterior >= 0) impide vender sin stock
+    CONCAT('Marcha de comanda #', @comanda_a_marchar),
+    'NODO_2_COCINA'
+FROM productos_menu p
+JOIN (
+    SELECT id_producto, SUM(cantidad) AS cantidad_total
+    FROM detalle_comanda
+    WHERE id_comanda = @comanda_a_marchar
+    GROUP BY id_producto
+) v ON v.id_producto = p.id_producto;
+
+-- Descontar del stock disponible de cada producto de la comanda.
+-- También se agrupa por producto: un UPDATE con JOIN directo a detalle_comanda
+-- actualiza cada fila de productos_menu una sola vez y descontaría solo una línea.
 UPDATE productos_menu p
-JOIN detalle_comanda d ON p.id_producto = d.id_producto
-SET p.stock_disponible = p.stock_disponible - d.cantidad
-WHERE d.id_comanda = @comanda_a_marchar;
+JOIN (
+    SELECT id_producto, SUM(cantidad) AS cantidad_total
+    FROM detalle_comanda
+    WHERE id_comanda = @comanda_a_marchar
+    GROUP BY id_producto
+) v ON v.id_producto = p.id_producto
+SET p.stock_disponible = p.stock_disponible - v.cantidad_total;
 
 COMMIT;
 
