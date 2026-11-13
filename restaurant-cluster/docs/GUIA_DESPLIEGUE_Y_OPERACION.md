@@ -75,9 +75,13 @@ docker compose -f "restaurant-cluster/docker-compose.yml" up -d
 ```powershell
 docker ps
 ```
-Debes ver ambos contenedores activos:
+Debes ver los cuatro contenedores activos:
 * `restaurante_nodo1_salon` en `0.0.0.0:3307->3306/tcp`
 * `restaurante_nodo2_cocina` en `0.0.0.0:3308->3306/tcp`
+* `restaurante_haproxy` en `3310` (Salón), `3311` (Cocina) y `8404` (panel de estado) — Fase 2
+* `restaurante_backup` en `3309` (instancia de restauración) — Fase 2
+
+> **Alternativa en un solo paso (Git Bash):** `bash pruebas_fase2/reiniciar_entorno.sh` (desde `restaurant-cluster/`) baja todo, borra los datos, levanta el clúster, carga los scripts de ABM y verifica que ambos nodos queden idénticos. Ver [FASE2_RESILIENCIA_Y_BACKUPS.md](FASE2_RESILIENCIA_Y_BACKUPS.md).
 
 ### Parámetros de Conexión para Clientes SQL (Workbench / DBeaver / CLI)
 
@@ -119,7 +123,7 @@ El proyecto cuenta con tres scripts operativos en las carpetas `scripts_abm/` qu
 ### B. Operaciones Transaccionales Completas de Salón y Caja (Nodo 1)
 **Archivo:** `restaurant-cluster/nodo1/scripts_abm/abm_salon.sql`
 
-> **Nota técnica sobre las semillas (`04_seed_catalogos.sql`):** Como `04_seed_catalogos.sql` se ejecuta localmente con `sql_log_bin = 0`, si deseas usar `id_mesa` del `1` al `10` e `id_cliente` del `1` al `4` de forma idéntica en ambos nodos, asegúrate de que los `INSERT` de `clientes` y `mesas` en `04_seed_catalogos.sql` incluyan explícitamente sus IDs (igual que `productos_menu`).
+> **Nota técnica sobre las semillas (`04_seed_catalogos.sql`):** La semilla se ejecuta localmente en cada nodo con `sql_log_bin = 0`, por lo que debe producir datos **idénticos** en ambos. Por eso todos los `INSERT` (`clientes`, `mesas`, `productos_menu` y `movimientos_stock`) usan IDs explícitos (sin ellos, el `auto_increment_offset` generaría IDs impares en un nodo y pares en el otro) y la carga fija el reloj con `SET TIMESTAMP` para que las marcas de tiempo coincidan.
 
 **Cómo ejecutarlo por consola:**
 ```powershell
@@ -198,3 +202,18 @@ Verás exactamente los mismos registros en ambos nodos:
 * En `comandas`: las órdenes **impares** originadas en `NODO_1_SALON` y las órdenes **pares** originadas en `NODO_2_COCINA`.
 * En `productos_menu`: el `stock_disponible` actualizado en ambos nodos tras los ingresos de proveedor, consumos de cocina y mermas.
 * En `historial_estados_comanda`: la trazabilidad combinada con eventos emitidos tanto por `NODO_1_SALON` como por `NODO_2_COCINA`.
+
+---
+
+## 6. Fase 2: Resiliencia, Failover y Respaldos
+
+La Fase 2 agrega al clúster un balanceador con conmutación por error automática (HAProxy), un servicio de respaldos automáticos (completo, diferencial e incremental) con restauración verificada, y un conjunto de pruebas reproducibles de caída, switchover, partición de red, desastre lógico y reconstrucción de un nodo.
+
+Toda la documentación, la política de RPO/RTO y los resultados medidos están en **[FASE2_RESILIENCIA_Y_BACKUPS.md](FASE2_RESILIENCIA_Y_BACKUPS.md)**.
+
+| Punto de conexión | Puerto | Uso |
+| :--- | :--- | :--- |
+| Salón vía HAProxy | `3310` | Aplicación del Salón (va al Nodo 1; si cae, al Nodo 2) |
+| Cocina vía HAProxy | `3311` | Aplicación de Cocina (va al Nodo 2; si cae, al Nodo 1) |
+| Panel de HAProxy | `8404` | `http://localhost:8404` — estado de cada nodo en vivo |
+| Instancia de restauración | `3309` | Base restaurada por `restaurar.sh` (`root` / `root_password_ae4`) |
