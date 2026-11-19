@@ -59,6 +59,17 @@ bash pruebas_fase3/ejecutar_fase3.sh --desde-cero
 
 Cada prueba guarda su salida completa en la carpeta `resultados/` de su fase. El tablero queda en `restaurant-cluster/fase3/tablero/tablero.html` y se abre con doble clic.
 
+## Demostración
+
+Con el clúster levantado (y la Fase 3 ya ejecutada), la presentación se hace desde un menú:
+
+```bash
+cd restaurant-cluster
+bash demo.sh
+```
+
+Muestra el estado del clúster, ejecuta las pruebas de las Fases 1 y 2, consulta en vivo índices, particiones, vista materializada y KDD, muestra los tiempos de la optimización y la evidencia guardada, y abre el panel de HAProxy y el tablero en el navegador. La opción `T` recorre todo en orden, con una pausa entre cada parte. No borra datos: si los contenedores están detenidos, los levanta conservándolos.
+
 ## Mapa del repositorio
 
 | Fase | Contenido | Documentación |
