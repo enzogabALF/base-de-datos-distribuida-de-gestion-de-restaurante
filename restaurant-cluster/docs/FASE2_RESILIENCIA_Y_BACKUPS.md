@@ -311,6 +311,8 @@ Resultado: [reconstruir_nodo2_20261113_014806.txt](../pruebas_fase2/resultados/r
 - Incluye las transacciones que había generado el Nodo 2 original, que la replicación sola habría perdido.
 - Consistencia final: 8/8.
 
+**Con el data warehouse de la Fase 3 cargado** ([reconstruir_nodo2_20261119_035510.txt](../pruebas_fase2/resultados/reconstruir_nodo2_20261119_035510.txt)), la siembra copia también `restaurante_dw`. Hace falta porque sus GTID quedan dentro de `gtid_purged` y la replicación nunca se los reenviaría: sin esto, el nodo reconstruido quedaba sin el data warehouse y el siguiente refresco programado cortaba su replicación. Los eventos de refresco quedan deshabilitados en el Nodo 2 (`SLAVESIDE_DISABLED`), como en el despliegue original. Con ~120.000 comandas y 297.890 filas de hechos el tiempo total es de **382 s**, con **RPO = 0**.
+
 ---
 
 ## 6. Problemas encontrados, decisiones y limitaciones

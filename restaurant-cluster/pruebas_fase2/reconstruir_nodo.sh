@@ -67,19 +67,34 @@ paso "3. Detener su replicación, borrar la base y limpiar su historial GTID"
 sql_nodo "$SOBREV" "STOP REPLICA IO_THREAD"
 # sql_log_bin = 0 es OBLIGATORIO: el otro nodo replica DESDE este. Si el DROP DATABASE
 # se escribiera en el binlog, el sobreviviente lo recibiría y borraría su propia base.
-sql_nodo "$C" "SET SESSION sql_log_bin = 0; STOP REPLICA; DROP DATABASE IF EXISTS restaurante_db; RESET MASTER;"
-ok "replicación detenida, base eliminada (sin registrar en el binlog), gtid_executed vacío"
+sql_nodo "$C" "SET SESSION sql_log_bin = 0; STOP REPLICA; DROP DATABASE IF EXISTS restaurante_db; DROP DATABASE IF EXISTS restaurante_dw; RESET MASTER;"
+ok "replicación detenida, bases eliminadas (sin registrar en el binlog), gtid_executed vacío"
 info "el sobreviviente conserva sus datos: $(sql_nodo "$SOBREV" "SELECT COUNT(*) FROM comandas") comandas"
 
 paso "4. Siembra: copia consistente en caliente del nodo sobreviviente"
+# Si ya se ejecutó la Fase 3, el data warehouse (restaurante_dw) también se replica y
+# debe sembrarse en la misma copia: sus GTID quedan incluidos en gtid_purged, así que
+# la replicación nunca se los reenviaría y el nodo quedaría sin él.
+BASES="$DB"
+[[ -n "$(sql_nodo "$SOBREV" "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = 'restaurante_dw'")" ]] \
+    && BASES="$DB restaurante_dw"
 T0="$(ahora_ms)"
 docker exec "$BK" bash -c "
     set -o pipefail
     mysqldump -h $IP_SOBREV -ubackup_user -pbackup_password_ae4 \
         --single-transaction --set-gtid-purged=ON --routines --triggers --events \
-        --databases $DB 2>/dev/null \
+        --databases $BASES 2>/dev/null \
     | mysql -h $IP -uroot -p'$ROOT_PW' 2>/dev/null" || falla "la siembra falló"
-ok "siembra completa en $(segundos_desde "$T0") s"
+ok "siembra completa en $(segundos_desde "$T0") s ($BASES)"
+if [[ "$BASES" == *restaurante_dw* ]]; then
+    # Los eventos de refresco del data warehouse corren solo en el Nodo 1; en el Nodo 2
+    # quedan SLAVESIDE_DISABLED (si corrieran en ambos, cada carga se haría dos veces).
+    ESTADO_EV="DISABLE ON SLAVE"; [[ "$NODO" == "nodo1" ]] && ESTADO_EV="ENABLE"
+    for ev in $(sql_nodo "$C" "SELECT EVENT_NAME FROM information_schema.EVENTS WHERE EVENT_SCHEMA = 'restaurante_dw'"); do
+        sql_nodo "$C" "SET SESSION sql_log_bin = 0; ALTER EVENT restaurante_dw.$ev $ESTADO_EV"
+    done
+    info "data warehouse: $(sql_nodo "$C" "SELECT COUNT(*) FROM restaurante_dw.hechos_ventas") filas en hechos_ventas, eventos: $ESTADO_EV"
+fi
 info "GTID sembrados: $(sql_nodo "$C" "SELECT REPLACE(@@GLOBAL.gtid_executed, '\n', '')")"
 
 paso "5. Reanudar la replicación (solo recibe lo posterior a la copia)"
