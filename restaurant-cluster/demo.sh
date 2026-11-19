@@ -165,42 +165,74 @@ consistencia() {
     correr pruebas_fase2/verificar_consistencia.sh
 }
 
+# cargar_cliente <contenedor> <nombre del nodo>: pide nombre y DNI por teclado y los
+# inserta en ese nodo. Deja el DNI cargado en CARGADO. Si el motor rechaza el alta
+# (por ejemplo, DNI repetido: restricción UNIQUE), muestra el error y lo vuelve a pedir.
+cargar_cliente() {
+    local c="$1" nodo="$2" nombre dni err intento
+    for intento in 1 2 3; do
+        nombre=''; dni=''
+        while [[ -z "$nombre" ]]; do read -r -p "   Nombre del cliente a cargar en el $nodo: " nombre; done
+        while [[ -z "$dni" ]]; do read -r -p "   DNI o CUIT: " dni; done
+        nombre="${nombre//\'/\'\'}"; dni="${dni//\'/\'\'}"
+        echo
+        comando "INSERT INTO clientes (nombre_completo, cuit_dni) VALUES ('$nombre', '$dni');   -- en el $nodo"
+        err="$(docker exec "$c" mysql -uroot -p"$ROOT_PW" --default-character-set=utf8mb4 -D "$DB" \
+               -e "INSERT INTO clientes (nombre_completo, cuit_dni) VALUES ('$nombre', '$dni')" 2>&1 | grep -v Warning)"
+        if [[ -z "$err" ]]; then
+            CARGADO="$dni"
+            printf '%s   ✔ Cliente cargado en el %s%s\n' "$VERDE" "$nodo" "$RST"
+            return 0
+        fi
+        printf '%s   ✘ El motor rechazó el alta: %s%s\n' "$ROJO" "$err" "$RST"
+        printf '%s   (si el DNI ya existe, lo rechaza la restricción UNIQUE; probá con otro)%s\n\n' "$AMAR" "$RST"
+    done
+    return 1
+}
+
 replicacion_en_vivo() {
     encabezado "REPLICACIÓN EN VIVO: UN DATO CARGADO EN UN NODO APARECE EN EL OTRO"
-    explicar "Se carga un cliente en el Nodo 1 (Salón) y se lee enseguida desde el Nodo 2 (Cocina)." \
-             "Después se carga otro en el Nodo 2 y se lee desde el Nodo 1: la replicación es bidireccional." \
-             "El ID generado en el Nodo 1 es impar y el del Nodo 2 es par: así los IDs nunca chocan." \
-             "Al final se borran los dos clientes de prueba, y el borrado también se replica."
-    local dni="DEMO-$(date +%H%M%S)"
-    local ver="SELECT id_cliente, nombre_completo, cuit_dni, @@hostname AS leido_en FROM clientes WHERE cuit_dni LIKE '$dni%' ORDER BY id_cliente"
+    explicar "Vos cargás un cliente en el Nodo 1 (Salón) y se lee enseguida desde el Nodo 2 (Cocina)." \
+             "Después cargás otro en el Nodo 2 y se leen los dos desde el Nodo 1: la replicación es bidireccional." \
+             "El ID que genera el Nodo 1 es impar y el del Nodo 2 es par: así los IDs nunca chocan." \
+             "Al final se pueden borrar los clientes cargados, y el borrado también se replica."
+    local dnis=() lista ver r
 
-    printf '%s1) Se carga un cliente en el Nodo 1 (Salón)%s\n' "$NEG" "$RST"
-    comando "INSERT INTO clientes (nombre_completo, cuit_dni) VALUES ('Cliente Demo Salón', '$dni-S')   -- en el Nodo 1"
-    tabla "$N1" "$DB" "INSERT INTO clientes (nombre_completo, cuit_dni) VALUES ('Cliente Demo Salón', '$dni-S'); $ver"
+    printf '%s1) Cargá un cliente en el Nodo 1 (Salón)%s\n' "$NEG" "$RST"
+    cargar_cliente "$N1" "Nodo 1 (Salón)" || return
+    dnis+=("$CARGADO")
+    lista="'${dnis[0]}'"
+    ver="SELECT id_cliente, nombre_completo, cuit_dni, @@hostname AS leido_en FROM clientes WHERE cuit_dni IN"
+    tabla "$N1" "$DB" "$ver ($lista) ORDER BY id_cliente"
     pausa
 
     printf '\n%s2) Se lee desde el Nodo 2 (Cocina): ya está replicado%s\n' "$NEG" "$RST"
     sleep 1
-    comando "SELECT ... FROM clientes WHERE cuit_dni = '$dni-S'   -- en el Nodo 2"
-    tabla "$N2" "$DB" "$ver"
+    comando "SELECT ... FROM clientes WHERE cuit_dni = ${lista};   -- en el Nodo 2"
+    tabla "$N2" "$DB" "$ver ($lista) ORDER BY id_cliente"
     pausa
 
-    printf '\n%s3) Ahora al revés: se carga un cliente en el Nodo 2 (Cocina)%s\n' "$NEG" "$RST"
-    comando "INSERT INTO clientes (nombre_completo, cuit_dni) VALUES ('Cliente Demo Cocina', '$dni-C')   -- en el Nodo 2"
-    docker exec "$N2" mysql -uroot -p"$ROOT_PW" --default-character-set=utf8mb4 -D "$DB" \
-        -e "INSERT INTO clientes (nombre_completo, cuit_dni) VALUES ('Cliente Demo Cocina', '$dni-C')" 2>/dev/null
-    sleep 1
-    printf '%s   Se leen los dos desde el Nodo 1: el del Salón con ID impar y el de la Cocina con ID par%s\n' "$NEG" "$RST"
-    tabla "$N1" "$DB" "$ver"
-    pausa
+    printf '\n%s3) Ahora al revés: cargá un cliente en el Nodo 2 (Cocina)%s\n' "$NEG" "$RST"
+    if cargar_cliente "$N2" "Nodo 2 (Cocina)"; then
+        dnis+=("$CARGADO")
+        lista="'${dnis[0]}', '${dnis[1]}'"
+        sleep 1
+        printf '\n%s   Se leen los dos desde el Nodo 1: el del Salón con ID impar y el de la Cocina con ID par%s\n' "$NEG" "$RST"
+        comando "SELECT ... FROM clientes WHERE cuit_dni IN (${lista});   -- en el Nodo 1"
+        tabla "$N1" "$DB" "$ver ($lista) ORDER BY id_cliente"
+    fi
 
+    echo
+    read -r -p "¿Borrar los clientes cargados para dejar la base como estaba? (S/n): " r
+    [[ "$r" == [nN] ]] && return
     printf '\n%s4) Limpieza: se borran en el Nodo 1 y el borrado llega al Nodo 2%s\n' "$NEG" "$RST"
-    comando "DELETE FROM clientes WHERE cuit_dni LIKE '$dni%'   -- en el Nodo 1"
-    docker exec "$N1" mysql -uroot -p"$ROOT_PW" -D "$DB" -e "DELETE FROM clientes WHERE cuit_dni LIKE '$dni%'" 2>/dev/null
+    comando "DELETE FROM clientes WHERE cuit_dni IN (${lista});   -- en el Nodo 1"
+    docker exec "$N1" mysql -uroot -p"$ROOT_PW" --default-character-set=utf8mb4 -D "$DB" \
+        -e "DELETE FROM clientes WHERE cuit_dni IN ($lista)" 2>/dev/null
     sleep 1
-    printf '   Clientes de prueba que quedan: Nodo 1 = %s | Nodo 2 = %s\n' \
-        "$(sql_nodo "$N1" "SELECT COUNT(*) FROM clientes WHERE cuit_dni LIKE '$dni%'")" \
-        "$(sql_nodo "$N2" "SELECT COUNT(*) FROM clientes WHERE cuit_dni LIKE '$dni%'")"
+    printf '   Clientes cargados que quedan: Nodo 1 = %s | Nodo 2 = %s\n' \
+        "$(sql_nodo "$N1" "SELECT COUNT(*) FROM clientes WHERE cuit_dni IN ($lista)")" \
+        "$(sql_nodo "$N2" "SELECT COUNT(*) FROM clientes WHERE cuit_dni IN ($lista)")"
 }
 
 fase1_flujo() {
