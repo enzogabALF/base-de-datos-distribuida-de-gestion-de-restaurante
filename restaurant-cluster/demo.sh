@@ -165,6 +165,44 @@ consistencia() {
     correr pruebas_fase2/verificar_consistencia.sh
 }
 
+replicacion_en_vivo() {
+    encabezado "REPLICACIÓN EN VIVO: UN DATO CARGADO EN UN NODO APARECE EN EL OTRO"
+    explicar "Se carga un cliente en el Nodo 1 (Salón) y se lee enseguida desde el Nodo 2 (Cocina)." \
+             "Después se carga otro en el Nodo 2 y se lee desde el Nodo 1: la replicación es bidireccional." \
+             "El ID generado en el Nodo 1 es impar y el del Nodo 2 es par: así los IDs nunca chocan." \
+             "Al final se borran los dos clientes de prueba, y el borrado también se replica."
+    local dni="DEMO-$(date +%H%M%S)"
+    local ver="SELECT id_cliente, nombre_completo, cuit_dni, @@hostname AS leido_en FROM clientes WHERE cuit_dni LIKE '$dni%' ORDER BY id_cliente"
+
+    printf '%s1) Se carga un cliente en el Nodo 1 (Salón)%s\n' "$NEG" "$RST"
+    comando "INSERT INTO clientes (nombre_completo, cuit_dni) VALUES ('Cliente Demo Salón', '$dni-S')   -- en el Nodo 1"
+    tabla "$N1" "$DB" "INSERT INTO clientes (nombre_completo, cuit_dni) VALUES ('Cliente Demo Salón', '$dni-S'); $ver"
+    pausa
+
+    printf '\n%s2) Se lee desde el Nodo 2 (Cocina): ya está replicado%s\n' "$NEG" "$RST"
+    sleep 1
+    comando "SELECT ... FROM clientes WHERE cuit_dni = '$dni-S'   -- en el Nodo 2"
+    tabla "$N2" "$DB" "$ver"
+    pausa
+
+    printf '\n%s3) Ahora al revés: se carga un cliente en el Nodo 2 (Cocina)%s\n' "$NEG" "$RST"
+    comando "INSERT INTO clientes (nombre_completo, cuit_dni) VALUES ('Cliente Demo Cocina', '$dni-C')   -- en el Nodo 2"
+    docker exec "$N2" mysql -uroot -p"$ROOT_PW" --default-character-set=utf8mb4 -D "$DB" \
+        -e "INSERT INTO clientes (nombre_completo, cuit_dni) VALUES ('Cliente Demo Cocina', '$dni-C')" 2>/dev/null
+    sleep 1
+    printf '%s   Se leen los dos desde el Nodo 1: el del Salón con ID impar y el de la Cocina con ID par%s\n' "$NEG" "$RST"
+    tabla "$N1" "$DB" "$ver"
+    pausa
+
+    printf '\n%s4) Limpieza: se borran en el Nodo 1 y el borrado llega al Nodo 2%s\n' "$NEG" "$RST"
+    comando "DELETE FROM clientes WHERE cuit_dni LIKE '$dni%'   -- en el Nodo 1"
+    docker exec "$N1" mysql -uroot -p"$ROOT_PW" -D "$DB" -e "DELETE FROM clientes WHERE cuit_dni LIKE '$dni%'" 2>/dev/null
+    sleep 1
+    printf '   Clientes de prueba que quedan: Nodo 1 = %s | Nodo 2 = %s\n' \
+        "$(sql_nodo "$N1" "SELECT COUNT(*) FROM clientes WHERE cuit_dni LIKE '$dni%'")" \
+        "$(sql_nodo "$N2" "SELECT COUNT(*) FROM clientes WHERE cuit_dni LIKE '$dni%'")"
+}
+
 fase1_flujo() {
     encabezado "FASE 1: FLUJO DISTRIBUIDO SALÓN → COCINA → CAJA"
     explicar "El Salón abre una comanda en el Nodo 1, la Cocina la ve replicada y la prepara en el Nodo 2," \
@@ -328,7 +366,7 @@ EOF
 # Recorrido completo, con pausa entre partes
 # --------------------------------------------------------------------------
 recorrido() {
-    local partes=(estado_cluster panel_haproxy consistencia fase1_flujo fase1_restricciones fase2_failover
+    local partes=(estado_cluster panel_haproxy replicacion_en_vivo consistencia fase1_flujo fase1_restricciones fase2_failover
                   fase2_switchover fase2_particion fase2_backup fase3_en_vivo fase3_resumen tablero)
     local p r
     for p in "${partes[@]}"; do
@@ -352,6 +390,7 @@ ${CIAN}${NEG}══════════════════════�
  ${NEG}Arquitectura${RST}
    1) Estado del clúster (nodos, replicación, HAProxy)
    2) Consistencia entre nodos
+   R) Replicación en vivo: cargar un dato en un nodo y verlo en el otro
  ${NEG}Fase 1 - Distribución y ABM${RST}
    3) Flujo Salón → Cocina → Caja                       (~25 s)
    4) Restricciones de integridad                       (~30 s)
@@ -383,6 +422,7 @@ while true; do
     case "$op" in
         1) estado_cluster ;;
         2) consistencia ;;
+        [rR]) replicacion_en_vivo ;;
         3) fase1_flujo ;;
         4) fase1_restricciones ;;
         5) fase2_failover ;;
