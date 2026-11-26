@@ -235,6 +235,140 @@ replicacion_en_vivo() {
         "$(sql_nodo "$N2" "SELECT COUNT(*) FROM clientes WHERE cuit_dni IN ($lista)")"
 }
 
+# esc <texto>: escapa comillas simples y barras para usarlo dentro de un literal SQL
+esc() { local v="${1//\\/\\\\}"; printf '%s' "${v//\'/\'\'}"; }
+
+# sql_err <contenedor> <sql>: ejecuta mostrando los errores del motor (sin los avisos)
+sql_err() {
+    docker exec "$1" mysql -uroot -p"$ROOT_PW" --default-character-set=utf8mb4 -N -B -D "$DB" -e "$2" 2>&1 \
+        | { grep -v Warning || true; }
+}
+
+abm_completo() {
+    encabezado "ABM COMPLETO: ALTA, MODIFICACIÓN, PEDIDO Y BAJA DE UN CLIENTE"
+    explicar "ALTA: cargás un cliente nuevo en el Nodo 1 (Salón)." \
+             "MODIFICACIÓN: le cambiás teléfono y email; el cambio se ve replicado en el Nodo 2." \
+             "PEDIDO: le abrís una comanda en una mesa libre con un plato de la carta; la Cocina la ve en el Nodo 2." \
+             "BAJA: se cancela el pedido, se libera la mesa y se da de baja al cliente (baja lógica)." \
+             "Al final se puede borrar todo lo cargado para dejar la base como estaba."
+    local ficha="SELECT id_cliente, nombre_completo, cuit_dni, telefono, email, IF(activo, 'ACTIVO', 'DADO DE BAJA') AS estado, @@hostname AS leido_en FROM clientes WHERE id_cliente ="
+    local dni idc tel mail mesa idm prod precio cant idcom pedido err r
+
+    # 1. ALTA
+    printf '%s1) ALTA: cargá un cliente nuevo en el Nodo 1 (Salón)%s\n' "$NEG" "$RST"
+    cargar_cliente "$N1" "Nodo 1 (Salón)" || return
+    dni="$CARGADO"
+    idc="$(sql_nodo "$N1" "SELECT id_cliente FROM clientes WHERE cuit_dni = '$dni'")"
+    tabla "$N1" "$DB" "$ficha $idc"
+    pausa
+
+    # 2. MODIFICACIÓN
+    printf '\n%s2) MODIFICACIÓN: actualizá sus datos de contacto (Nodo 1)%s\n' "$NEG" "$RST"
+    read -r -p "   Teléfono: " tel
+    read -r -p "   Email: " mail
+    tel="$(esc "$tel")"; mail="$(esc "$mail")"
+    echo
+    comando "UPDATE clientes SET telefono = '$tel', email = '$mail' WHERE id_cliente = $idc;   -- en el Nodo 1"
+    err="$(sql_err "$N1" "UPDATE clientes SET telefono = NULLIF('$tel', ''), email = NULLIF('$mail', '') WHERE id_cliente = $idc")"
+    [[ -n "$err" ]] && printf '%s   ✘ %s%s\n' "$ROJO" "$err" "$RST"
+    sleep 1
+    printf '%s   Se lee desde el Nodo 2: la modificación ya está replicada%s\n' "$NEG" "$RST"
+    tabla "$N2" "$DB" "$ficha $idc"
+    pausa
+
+    # 3. PEDIDO
+    printf '\n%s3) PEDIDO: abrile una comanda en una mesa libre (Nodo 1, Salón)%s\n' "$NEG" "$RST"
+    echo "   Mesas libres:"
+    tabla "$N1" "$DB" "SELECT numero_mesa AS mesa, capacidad, sector FROM mesas WHERE estado = 'LIBRE' ORDER BY numero_mesa"
+    while true; do
+        read -r -p "   Número de mesa: " mesa
+        idm=''
+        [[ "$mesa" =~ ^[0-9]+$ ]] && idm="$(sql_nodo "$N1" "SELECT id_mesa FROM mesas WHERE numero_mesa = $mesa AND estado = 'LIBRE'")"
+        [[ -n "$idm" ]] && break
+        echo "   Esa mesa no existe o no está libre; elegí una de la lista."
+    done
+    echo "   Carta:"
+    tabla "$N1" "$DB" "SELECT id_producto AS codigo, nombre, precio FROM productos_menu WHERE activo = 1 ORDER BY id_producto"
+    while true; do
+        read -r -p "   Código del plato: " prod
+        precio=''
+        [[ "$prod" =~ ^[0-9]+$ ]] && precio="$(sql_nodo "$N1" "SELECT precio FROM productos_menu WHERE id_producto = $prod AND activo = 1")"
+        [[ -n "$precio" ]] && break
+        echo "   Código inválido; elegí uno de la carta."
+    done
+    while true; do
+        read -r -p "   Cantidad: " cant
+        [[ "$cant" =~ ^[1-9][0-9]?$ ]] && break
+        echo "   Ingresá un número entre 1 y 99."
+    done
+    echo
+    comando "START TRANSACTION;
+  UPDATE mesas SET estado = 'OCUPADA' WHERE numero_mesa = $mesa;
+  INSERT INTO comandas (id_mesa, id_cliente, mozo, nodo_origen, estado) VALUES ($idm, $idc, 'Mozo Demo', 'NODO_1_SALON', 'ABIERTA');
+  INSERT INTO historial_estados_comanda (...) VALUES (..., 'ABIERTA', ...);
+  INSERT INTO detalle_comanda (id_comanda, id_producto, cantidad, precio_unitario) VALUES (..., $prod, $cant, $precio);
+  UPDATE comandas SET total = (SELECT SUM(subtotal) FROM detalle_comanda WHERE ...);
+COMMIT;   -- en el Nodo 1"
+    idcom="$(sql_err "$N1" "START TRANSACTION;
+        UPDATE mesas SET estado = 'OCUPADA' WHERE id_mesa = $idm AND estado = 'LIBRE';
+        INSERT INTO comandas (id_mesa, id_cliente, mozo, nodo_origen, estado, total) VALUES ($idm, $idc, 'Mozo Demo', 'NODO_1_SALON', 'ABIERTA', 0);
+        SET @c = LAST_INSERT_ID();
+        INSERT INTO historial_estados_comanda (id_comanda, estado_anterior, estado_nuevo, operador, nodo_emisor, observacion)
+            VALUES (@c, NULL, 'ABIERTA', 'Mozo Demo', 'NODO_1_SALON', 'Apertura de comanda (demo en vivo)');
+        INSERT INTO detalle_comanda (id_comanda, id_producto, cantidad, precio_unitario, estado_cocina, punto_coccion)
+            VALUES (@c, $prod, $cant, $precio, 'PENDIENTE', 'NO_APLICA');
+        UPDATE comandas SET total = (SELECT SUM(subtotal) FROM detalle_comanda WHERE id_comanda = @c) WHERE id_comanda = @c;
+        COMMIT;
+        SELECT @c;")"
+    if [[ ! "$idcom" =~ ^[0-9]+$ ]]; then
+        printf '%s   ✘ No se pudo abrir la comanda: %s%s\n' "$ROJO" "$idcom" "$RST"
+        return
+    fi
+    printf '%s   ✔ Comanda #%s abierta (ID impar: la generó el Nodo 1)%s\n' "$VERDE" "$idcom" "$RST"
+    pedido="SELECT co.id_comanda AS comanda, cl.nombre_completo AS cliente, m.numero_mesa AS mesa, p.nombre AS plato, d.cantidad, co.total, co.estado, d.estado_cocina AS cocina, @@hostname AS leido_en
+            FROM comandas co JOIN detalle_comanda d ON d.id_comanda = co.id_comanda JOIN productos_menu p ON p.id_producto = d.id_producto
+            JOIN mesas m ON m.id_mesa = co.id_mesa LEFT JOIN clientes cl ON cl.id_cliente = co.id_cliente WHERE co.id_comanda = $idcom"
+    sleep 1
+    printf '%s   La Cocina ve el pedido en el Nodo 2:%s\n' "$NEG" "$RST"
+    tabla "$N2" "$DB" "$pedido"
+    pausa
+
+    # 4. BAJA
+    printf '\n%s4) BAJA: se cancela el pedido, se libera la mesa y se da de baja al cliente (Nodo 1)%s\n' "$NEG" "$RST"
+    comando "START TRANSACTION;
+  UPDATE comandas SET estado = 'CANCELADA', motivo_cancelacion = 'Baja del cliente', fecha_cierre = NOW() WHERE id_comanda = $idcom;
+  INSERT INTO historial_estados_comanda (...) VALUES ($idcom, 'ABIERTA', 'CANCELADA', ...);
+  UPDATE detalle_comanda SET estado_cocina = 'ANULADO' WHERE id_comanda = $idcom;
+  UPDATE mesas SET estado = 'LIBRE' WHERE numero_mesa = $mesa;
+  UPDATE clientes SET activo = 0 WHERE id_cliente = $idc;
+COMMIT;   -- en el Nodo 1"
+    err="$(sql_err "$N1" "START TRANSACTION;
+        UPDATE comandas SET estado = 'CANCELADA', motivo_cancelacion = 'Baja del cliente (demo en vivo)', fecha_cierre = NOW() WHERE id_comanda = $idcom;
+        INSERT INTO historial_estados_comanda (id_comanda, estado_anterior, estado_nuevo, operador, nodo_emisor, observacion)
+            VALUES ($idcom, 'ABIERTA', 'CANCELADA', 'Jefe de Salón', 'NODO_1_SALON', 'Cancelación por baja del cliente');
+        UPDATE detalle_comanda SET estado_cocina = 'ANULADO' WHERE id_comanda = $idcom;
+        UPDATE mesas SET estado = 'LIBRE' WHERE id_mesa = $idm;
+        UPDATE clientes SET activo = 0 WHERE id_cliente = $idc;
+        COMMIT;")"
+    [[ -n "$err" ]] && printf '%s   ✘ %s%s\n' "$ROJO" "$err" "$RST"
+    sleep 1
+    printf '%s   Desde el Nodo 2: el cliente figura dado de baja y su pedido cancelado%s\n' "$NEG" "$RST"
+    tabla "$N2" "$DB" "$ficha $idc"
+    tabla "$N2" "$DB" "$pedido"
+    echo "   Es una baja lógica: el cliente no se borra, para conservar el historial de sus pedidos."
+
+    echo
+    read -r -p "¿Borrar todo lo cargado (cliente y comanda) para dejar la base como estaba? (S/n): " r
+    [[ "$r" == [nN] ]] && return
+    comando "DELETE FROM comandas WHERE id_comanda = $idcom;   DELETE FROM clientes WHERE id_cliente = $idc;   -- en el Nodo 1 (detalle e historial se borran en cascada)"
+    err="$(sql_err "$N1" "DELETE FROM comandas WHERE id_comanda = $idcom; DELETE FROM clientes WHERE id_cliente = $idc;")"
+    [[ -n "$err" ]] && printf '%s   ✘ %s%s\n' "$ROJO" "$err" "$RST"
+    sleep 1
+    printf '   Lo cargado que queda: Nodo 1 = %s | Nodo 2 = %s\n' \
+        "$(sql_nodo "$N1" "SELECT (SELECT COUNT(*) FROM clientes WHERE id_cliente = $idc) + (SELECT COUNT(*) FROM comandas WHERE id_comanda = $idcom)")" \
+        "$(sql_nodo "$N2" "SELECT (SELECT COUNT(*) FROM clientes WHERE id_cliente = $idc) + (SELECT COUNT(*) FROM comandas WHERE id_comanda = $idcom)")"
+}
+
 fase1_flujo() {
     encabezado "FASE 1: FLUJO DISTRIBUIDO SALÓN → COCINA → CAJA"
     explicar "El Salón abre una comanda en el Nodo 1, la Cocina la ve replicada y la prepara en el Nodo 2," \
@@ -398,7 +532,7 @@ EOF
 # Recorrido completo, con pausa entre partes
 # --------------------------------------------------------------------------
 recorrido() {
-    local partes=(estado_cluster panel_haproxy replicacion_en_vivo consistencia fase1_flujo fase1_restricciones fase2_failover
+    local partes=(estado_cluster panel_haproxy replicacion_en_vivo consistencia fase1_flujo abm_completo fase1_restricciones fase2_failover
                   fase2_switchover fase2_particion fase2_backup fase3_en_vivo fase3_resumen tablero)
     local p r
     for p in "${partes[@]}"; do
@@ -423,6 +557,7 @@ ${CIAN}${NEG}══════════════════════�
    1) Estado del clúster (nodos, replicación, HAProxy)
    2) Consistencia entre nodos
    R) Replicación en vivo: cargar un dato en un nodo y verlo en el otro
+   A) ABM completo: alta, modificación, pedido y baja de un cliente
  ${NEG}Fase 1 - Distribución y ABM${RST}
    3) Flujo Salón → Cocina → Caja                       (~25 s)
    4) Restricciones de integridad                       (~30 s)
@@ -455,6 +590,7 @@ while true; do
         1) estado_cluster ;;
         2) consistencia ;;
         [rR]) replicacion_en_vivo ;;
+        [aA]) abm_completo ;;
         3) fase1_flujo ;;
         4) fase1_restricciones ;;
         5) fase2_failover ;;
