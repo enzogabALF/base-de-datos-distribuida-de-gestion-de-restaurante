@@ -257,11 +257,42 @@ sql_err() {
         | { grep -v Warning || true; }
 }
 
+# elegir_platos <contenedor> <estado_cocina>: muestra la carta y pide platos (código y
+# cantidad) hasta que se deja el código vacío. Deja en ITEMS_SQL las filas para el INSERT
+# del detalle (con @c como comanda) y en ITEMS_TXT su versión resumida para mostrar.
+elegir_platos() {
+    local c="$1" est="$2" prod precio cant nombre
+    ITEMS_SQL=''; ITEMS_TXT=''
+    echo "   Carta:"
+    tabla "$c" "$DB" "SELECT id_producto AS codigo, nombre, precio FROM productos_menu WHERE activo = 1 ORDER BY id_producto"
+    echo "   Cargá los platos de a uno (código y cantidad). Para terminar, dejá el código vacío y apretá Enter."
+    while true; do
+        read -r -p "   Código del plato: " prod
+        if [[ -z "$prod" ]]; then
+            [[ -n "$ITEMS_SQL" ]] && break
+            echo "   Cargá al menos un plato."
+            continue
+        fi
+        precio=''
+        [[ "$prod" =~ ^[0-9]+$ ]] && precio="$(sql_nodo "$c" "SELECT precio FROM productos_menu WHERE id_producto = $prod AND activo = 1")"
+        if [[ -z "$precio" ]]; then echo "   Código inválido; elegí uno de la carta."; continue; fi
+        while true; do
+            read -r -p "   Cantidad: " cant
+            [[ "$cant" =~ ^[1-9][0-9]?$ ]] && break
+            echo "   Ingresá un número entre 1 y 99."
+        done
+        nombre="$(sql_nodo "$c" "SELECT nombre FROM productos_menu WHERE id_producto = $prod")"
+        printf '%s   + %s x %s%s\n' "$VERDE" "$cant" "$nombre" "$RST"
+        ITEMS_SQL+="${ITEMS_SQL:+, }(@c, $prod, $cant, $precio, '$est', 'NO_APLICA')"
+        ITEMS_TXT+="${ITEMS_TXT:+, }(..., $prod, $cant, $precio)"
+    done
+}
+
 abm_completo() {
     encabezado "ABM COMPLETO: ALTA, MODIFICACIÓN, PEDIDO Y BAJA DE UN CLIENTE"
     explicar "ALTA: cargás un cliente nuevo en el Nodo 1 (Salón)." \
              "MODIFICACIÓN: le cambiás teléfono y email; el cambio se ve replicado en el Nodo 2." \
-             "PEDIDO: le abrís una comanda en una mesa libre con un plato de la carta; la Cocina la ve en el Nodo 2." \
+             "PEDIDO: le abrís una comanda en una mesa libre con los platos que elijas; la Cocina la ve en el Nodo 2." \
              "BAJA: se cancela el pedido, se libera la mesa y se da de baja al cliente (baja lógica)." \
              "Al final se puede borrar todo lo cargado para dejar la base como estaba."
     local ficha="SELECT id_cliente, nombre_completo, cuit_dni, telefono, email, IF(activo, 'ACTIVO', 'DADO DE BAJA') AS estado, @@hostname AS leido_en FROM clientes WHERE id_cliente ="
@@ -300,26 +331,13 @@ abm_completo() {
         [[ -n "$idm" ]] && break
         echo "   Esa mesa no existe o no está libre; elegí una de la lista."
     done
-    echo "   Carta:"
-    tabla "$N1" "$DB" "SELECT id_producto AS codigo, nombre, precio FROM productos_menu WHERE activo = 1 ORDER BY id_producto"
-    while true; do
-        read -r -p "   Código del plato: " prod
-        precio=''
-        [[ "$prod" =~ ^[0-9]+$ ]] && precio="$(sql_nodo "$N1" "SELECT precio FROM productos_menu WHERE id_producto = $prod AND activo = 1")"
-        [[ -n "$precio" ]] && break
-        echo "   Código inválido; elegí uno de la carta."
-    done
-    while true; do
-        read -r -p "   Cantidad: " cant
-        [[ "$cant" =~ ^[1-9][0-9]?$ ]] && break
-        echo "   Ingresá un número entre 1 y 99."
-    done
+    elegir_platos "$N1" PENDIENTE
     echo
     comando "START TRANSACTION;
   UPDATE mesas SET estado = 'OCUPADA' WHERE numero_mesa = $mesa;
   INSERT INTO comandas (id_mesa, id_cliente, mozo, nodo_origen, estado) VALUES ($idm, $idc, 'Mozo Demo', 'NODO_1_SALON', 'ABIERTA');
   INSERT INTO historial_estados_comanda (...) VALUES (..., 'ABIERTA', ...);
-  INSERT INTO detalle_comanda (id_comanda, id_producto, cantidad, precio_unitario) VALUES (..., $prod, $cant, $precio);
+  INSERT INTO detalle_comanda (id_comanda, id_producto, cantidad, precio_unitario) VALUES $ITEMS_TXT;
   UPDATE comandas SET total = (SELECT SUM(subtotal) FROM detalle_comanda WHERE ...);
 COMMIT;   -- en el Nodo 1"
     idcom="$(sql_err "$N1" "START TRANSACTION;
@@ -329,7 +347,7 @@ COMMIT;   -- en el Nodo 1"
         INSERT INTO historial_estados_comanda (id_comanda, estado_anterior, estado_nuevo, operador, nodo_emisor, observacion)
             VALUES (@c, NULL, 'ABIERTA', 'Mozo Demo', 'NODO_1_SALON', 'Apertura de comanda (demo en vivo)');
         INSERT INTO detalle_comanda (id_comanda, id_producto, cantidad, precio_unitario, estado_cocina, punto_coccion)
-            VALUES (@c, $prod, $cant, $precio, 'PENDIENTE', 'NO_APLICA');
+            VALUES $ITEMS_SQL;
         UPDATE comandas SET total = (SELECT SUM(subtotal) FROM detalle_comanda WHERE id_comanda = @c) WHERE id_comanda = @c;
         COMMIT;
         SELECT @c;")"
@@ -453,25 +471,12 @@ apagar_nodo() {
         [[ -n "$idm" ]] && break
         echo "   Esa mesa no existe o no está libre; elegí una de la lista."
     done
-    echo "   Carta:"
-    tabla "$vivo" "$DB" "SELECT id_producto AS codigo, nombre, precio FROM productos_menu WHERE activo = 1 ORDER BY id_producto"
-    while true; do
-        read -r -p "   Código del plato: " prod
-        precio=''
-        [[ "$prod" =~ ^[0-9]+$ ]] && precio="$(sql_nodo "$vivo" "SELECT precio FROM productos_menu WHERE id_producto = $prod AND activo = 1")"
-        [[ -n "$precio" ]] && break
-        echo "   Código inválido; elegí uno de la carta."
-    done
-    while true; do
-        read -r -p "   Cantidad: " cant
-        [[ "$cant" =~ ^[1-9][0-9]?$ ]] && break
-        echo "   Ingresá un número entre 1 y 99."
-    done
+    elegir_platos "$vivo" ENTREGADO
     echo
     comando "START TRANSACTION;   -- en el $nom_vivo
   UPDATE mesas SET estado = 'OCUPADA' WHERE numero_mesa = $mesa;
   INSERT INTO comandas (...) VALUES ($idm, $idc, 'Mozo Demo', '$origen', 'ABIERTA');          -- apertura
-  INSERT INTO detalle_comanda (...) VALUES (..., $prod, $cant, $precio);                          -- plato
+  INSERT INTO detalle_comanda (...) VALUES $ITEMS_TXT;   -- platos
   UPDATE comandas SET total = (SELECT SUM(subtotal) ...);
   INSERT INTO pagos (id_comanda, metodo_pago, monto_total, nodo_caja) VALUES (..., 'EFECTIVO', total, '$origen');   -- cobro
   UPDATE comandas SET estado = 'PAGADA', fecha_cierre = NOW();
@@ -486,7 +491,7 @@ COMMIT;"
         INSERT INTO historial_estados_comanda (id_comanda, estado_anterior, estado_nuevo, operador, nodo_emisor, observacion)
             VALUES (@c, NULL, 'ABIERTA', 'Mozo Demo', '$origen', 'Apertura con el otro nodo apagado (demo)');
         INSERT INTO detalle_comanda (id_comanda, id_producto, cantidad, precio_unitario, estado_cocina, punto_coccion)
-            VALUES (@c, $prod, $cant, $precio, 'ENTREGADO', 'NO_APLICA');
+            VALUES $ITEMS_SQL;
         UPDATE comandas SET total = (SELECT SUM(subtotal) FROM detalle_comanda WHERE id_comanda = @c) WHERE id_comanda = @c;
         INSERT INTO pagos (id_comanda, metodo_pago, tipo_comprobante, monto_total, nodo_caja)
             VALUES (@c, 'EFECTIVO', 'TICKET_CONSUMO', (SELECT total FROM comandas WHERE id_comanda = @c), '$origen');
