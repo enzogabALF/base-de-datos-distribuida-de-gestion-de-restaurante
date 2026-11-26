@@ -49,6 +49,19 @@ tabla() {
     docker exec "$1" mysql -uroot -p"$ROOT_PW" --default-character-set=utf8mb4 -t -D "$2" -e "$3" 2>/dev/null
 }
 
+# esperar_sincro: espera (hasta ~15 s) que cada nodo haya aplicado todas las transacciones
+# del otro (mismo gtid_executed), para leer recién cuando la replicación terminó
+esperar_sincro() {
+    local i g1 g2
+    for i in $(seq 1 30); do
+        g1="$(sql_nodo "$N1" "SELECT REPLACE(@@GLOBAL.gtid_executed, '\n', '')")"
+        g2="$(sql_nodo "$N2" "SELECT REPLACE(@@GLOBAL.gtid_executed, '\n', '')")"
+        [[ -n "$g1" && "$g1" == "$g2" ]] && return 0
+        sleep 0.5
+    done
+    return 1
+}
+
 # correr <script> [args]: ejecuta una prueba existente e informa el resultado
 correr() {
     comando "bash $*"
@@ -207,7 +220,7 @@ replicacion_en_vivo() {
     pausa
 
     printf '\n%s2) Se lee desde el Nodo 2 (Cocina): ya está replicado%s\n' "$NEG" "$RST"
-    sleep 1
+    esperar_sincro
     comando "SELECT ... FROM clientes WHERE cuit_dni = ${lista};   -- en el Nodo 2"
     tabla "$N2" "$DB" "$ver ($lista) ORDER BY id_cliente"
     pausa
@@ -216,7 +229,7 @@ replicacion_en_vivo() {
     if cargar_cliente "$N2" "Nodo 2 (Cocina)"; then
         dnis+=("$CARGADO")
         lista="'${dnis[0]}', '${dnis[1]}'"
-        sleep 1
+        esperar_sincro
         printf '\n%s   Se leen los dos desde el Nodo 1: el del Salón con ID impar y el de la Cocina con ID par%s\n' "$NEG" "$RST"
         comando "SELECT ... FROM clientes WHERE cuit_dni IN (${lista});   -- en el Nodo 1"
         tabla "$N1" "$DB" "$ver ($lista) ORDER BY id_cliente"
@@ -229,7 +242,7 @@ replicacion_en_vivo() {
     comando "DELETE FROM clientes WHERE cuit_dni IN (${lista});   -- en el Nodo 1"
     docker exec "$N1" mysql -uroot -p"$ROOT_PW" --default-character-set=utf8mb4 -D "$DB" \
         -e "DELETE FROM clientes WHERE cuit_dni IN ($lista)" 2>/dev/null
-    sleep 1
+    esperar_sincro
     printf '   Clientes cargados que quedan: Nodo 1 = %s | Nodo 2 = %s\n' \
         "$(sql_nodo "$N1" "SELECT COUNT(*) FROM clientes WHERE cuit_dni IN ($lista)")" \
         "$(sql_nodo "$N2" "SELECT COUNT(*) FROM clientes WHERE cuit_dni IN ($lista)")"
@@ -271,7 +284,7 @@ abm_completo() {
     comando "UPDATE clientes SET telefono = '$tel', email = '$mail' WHERE id_cliente = $idc;   -- en el Nodo 1"
     err="$(sql_err "$N1" "UPDATE clientes SET telefono = NULLIF('$tel', ''), email = NULLIF('$mail', '') WHERE id_cliente = $idc")"
     [[ -n "$err" ]] && printf '%s   ✘ %s%s\n' "$ROJO" "$err" "$RST"
-    sleep 1
+    esperar_sincro
     printf '%s   Se lee desde el Nodo 2: la modificación ya está replicada%s\n' "$NEG" "$RST"
     tabla "$N2" "$DB" "$ficha $idc"
     pausa
@@ -328,7 +341,7 @@ COMMIT;   -- en el Nodo 1"
     pedido="SELECT co.id_comanda AS comanda, cl.nombre_completo AS cliente, m.numero_mesa AS mesa, p.nombre AS plato, d.cantidad, co.total, co.estado, d.estado_cocina AS cocina, @@hostname AS leido_en
             FROM comandas co JOIN detalle_comanda d ON d.id_comanda = co.id_comanda JOIN productos_menu p ON p.id_producto = d.id_producto
             JOIN mesas m ON m.id_mesa = co.id_mesa LEFT JOIN clientes cl ON cl.id_cliente = co.id_cliente WHERE co.id_comanda = $idcom"
-    sleep 1
+    esperar_sincro
     printf '%s   La Cocina ve el pedido en el Nodo 2:%s\n' "$NEG" "$RST"
     tabla "$N2" "$DB" "$pedido"
     pausa
@@ -351,7 +364,7 @@ COMMIT;   -- en el Nodo 1"
         UPDATE clientes SET activo = 0 WHERE id_cliente = $idc;
         COMMIT;")"
     [[ -n "$err" ]] && printf '%s   ✘ %s%s\n' "$ROJO" "$err" "$RST"
-    sleep 1
+    esperar_sincro
     printf '%s   Desde el Nodo 2: el cliente figura dado de baja y su pedido cancelado%s\n' "$NEG" "$RST"
     tabla "$N2" "$DB" "$ficha $idc"
     tabla "$N2" "$DB" "$pedido"
@@ -363,7 +376,7 @@ COMMIT;   -- en el Nodo 1"
     comando "DELETE FROM comandas WHERE id_comanda = $idcom;   DELETE FROM clientes WHERE id_cliente = $idc;   -- en el Nodo 1 (detalle e historial se borran en cascada)"
     err="$(sql_err "$N1" "DELETE FROM comandas WHERE id_comanda = $idcom; DELETE FROM clientes WHERE id_cliente = $idc;")"
     [[ -n "$err" ]] && printf '%s   ✘ %s%s\n' "$ROJO" "$err" "$RST"
-    sleep 1
+    esperar_sincro
     printf '   Lo cargado que queda: Nodo 1 = %s | Nodo 2 = %s\n' \
         "$(sql_nodo "$N1" "SELECT (SELECT COUNT(*) FROM clientes WHERE id_cliente = $idc) + (SELECT COUNT(*) FROM comandas WHERE id_comanda = $idcom)")" \
         "$(sql_nodo "$N2" "SELECT (SELECT COUNT(*) FROM clientes WHERE id_cliente = $idc) + (SELECT COUNT(*) FROM comandas WHERE id_comanda = $idcom)")"
@@ -505,7 +518,7 @@ COMMIT;"
     # 6. Encendido
     printf '\n%s6) Se vuelve a prender el %s%s\n' "$NEG" "$nom_caido" "$RST"
     prender_nodo "$caido" "$nom_caido"
-    sleep 2
+    esperar_sincro
 
     # 7. Verificación del nodo recuperado
     printf '\n%s7) Verificación: el %s recibió todo lo que se cargó mientras estaba apagado%s\n' "$NEG" "$nom_caido" "$RST"
@@ -523,7 +536,7 @@ COMMIT;"
     comando "DELETE FROM pagos WHERE id_comanda = $idcom;   DELETE FROM comandas WHERE id_comanda = $idcom;   DELETE FROM clientes WHERE id_cliente = $idc;"
     err="$(sql_err "$N1" "DELETE FROM pagos WHERE id_comanda = $idcom; DELETE FROM comandas WHERE id_comanda = $idcom; DELETE FROM clientes WHERE id_cliente = $idc;")"
     [[ -n "$err" ]] && printf '%s   ✘ %s%s\n' "$ROJO" "$err" "$RST"
-    sleep 1
+    esperar_sincro
     printf '   Lo cargado que queda: Nodo 1 = %s | Nodo 2 = %s\n' \
         "$(sql_nodo "$N1" "SELECT (SELECT COUNT(*) FROM clientes WHERE id_cliente = $idc) + (SELECT COUNT(*) FROM comandas WHERE id_comanda = $idcom)")" \
         "$(sql_nodo "$N2" "SELECT (SELECT COUNT(*) FROM clientes WHERE id_cliente = $idc) + (SELECT COUNT(*) FROM comandas WHERE id_comanda = $idcom)")"
@@ -746,7 +759,7 @@ verificar_entorno
 sleep 1
 while true; do
     menu
-    read -r -p "Opción: " op
+    read -r -p "Opción: " op || { echo; exit 0; }
     case "$op" in
         1) estado_cluster ;;
         2) consistencia ;;
