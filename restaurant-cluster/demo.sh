@@ -369,6 +369,166 @@ COMMIT;   -- en el Nodo 1"
         "$(sql_nodo "$N2" "SELECT (SELECT COUNT(*) FROM clientes WHERE id_cliente = $idc) + (SELECT COUNT(*) FROM comandas WHERE id_comanda = $idcom)")"
 }
 
+# prender_nodo <contenedor> <nombre>: lo arranca y espera que esté sano y replicando
+prender_nodo() {
+    comando "docker start $1"
+    docker start "$1" > /dev/null
+    printf '   Esperando que el %s arranque y retome la replicación' "$2"
+    esperar_healthy "$1" 180 || { printf '\n%s   ✘ El %s no quedó healthy%s\n' "$ROJO" "$2" "$RST"; return 1; }
+    local i
+    for i in $(seq 1 45); do replicacion_ok "$N1" && replicacion_ok "$N2" && break; printf '.'; sleep 2; done
+    echo
+    if replicacion_ok "$N1" && replicacion_ok "$N2"; then
+        printf '%s   ✔ %s encendido, sano y con la replicación activa en ambos sentidos%s\n' "$VERDE" "$2" "$RST"
+    else
+        printf '%s   ✘ La replicación todavía no se restableció; revisar con la opción 1%s\n' "$ROJO" "$RST"
+    fi
+}
+
+apagar_nodo() {
+    encabezado "UN NODO APAGADO: EL OTRO SIGUE CARGANDO DATOS Y AL VOLVER SE PONE AL DÍA"
+    explicar "Elegís qué nodo apagar. El otro sigue funcionando solo y con todos los datos." \
+             "Con el nodo apagado se hace un ALTA (un cliente) y una CARGA COMPLETA: pedido, cobro y mesa liberada." \
+             "Al prender el nodo de nuevo, la replicación le envía todo lo que se cargó mientras estaba apagado." \
+             "Se verifica que el nodo recuperado quede con exactamente los mismos datos que el otro."
+    local op caido vivo nom_caido nom_vivo origen paridad dni idc mesa idm prod precio cant idcom err r
+    while true; do
+        read -r -p "¿Qué nodo apagar? (1 = Nodo 1 Salón, 2 = Nodo 2 Cocina): " op
+        [[ "$op" == 1 || "$op" == 2 ]] && break
+    done
+    if [[ "$op" == 1 ]]; then
+        caido="$N1"; nom_caido="Nodo 1 (Salón)"; vivo="$N2"; nom_vivo="Nodo 2 (Cocina)"; origen=NODO_2_COCINA; paridad=par
+    else
+        caido="$N2"; nom_caido="Nodo 2 (Cocina)"; vivo="$N1"; nom_vivo="Nodo 1 (Salón)"; origen=NODO_1_SALON; paridad=impar
+    fi
+    local conteo="SELECT @@hostname AS nodo, (SELECT COUNT(*) FROM clientes) AS clientes, (SELECT COUNT(*) FROM comandas) AS comandas, (SELECT COUNT(*) FROM detalle_comanda) AS detalle, (SELECT COUNT(*) FROM pagos) AS pagos"
+
+    # 1. Estado inicial
+    printf '\n%s1) Estado inicial: los dos nodos tienen los mismos datos%s\n' "$NEG" "$RST"
+    tabla "$N1" "$DB" "$conteo"
+    tabla "$N2" "$DB" "$conteo"
+    pausa
+
+    # 2. Apagado
+    printf '\n%s2) Se apaga el %s%s\n' "$NEG" "$nom_caido" "$RST"
+    comando "docker stop $caido   (apagado ordenado)"
+    docker stop -t 60 "$caido" > /dev/null
+    docker ps -a --filter name=restaurante_nodo --format 'table {{.Names}}\t{{.Status}}' | sed 's/^/   /'
+    printf '\n   Intento de consultar el nodo apagado:\n'
+    docker exec "$caido" mysql -uroot -p"$ROOT_PW" -e "SELECT 1" 2>&1 | grep -v Warning | head -1 | sed 's/^/   /'
+    pausa
+
+    # 3. Alta con el nodo apagado
+    printf '\n%s3) ALTA con el %s apagado: cargá un cliente en el %s%s\n' "$NEG" "$nom_caido" "$nom_vivo" "$RST"
+    echo "   (la primera escritura tarda ~3 s: espera la confirmación del otro nodo y, al no recibirla, sigue sin él)"
+    if ! cargar_cliente "$vivo" "$nom_vivo"; then prender_nodo "$caido" "$nom_caido"; return; fi
+    dni="$CARGADO"
+    idc="$(sql_nodo "$vivo" "SELECT id_cliente FROM clientes WHERE cuit_dni = '$dni'")"
+    local ficha="SELECT id_cliente, nombre_completo, cuit_dni, puntos_fidelidad AS puntos, @@hostname AS leido_en FROM clientes WHERE id_cliente = $idc"
+    tabla "$vivo" "$DB" "$ficha"
+    echo "   El ID es $paridad: lo generó el $nom_vivo."
+    pausa
+
+    # 4. Carga completa con el nodo apagado
+    printf '\n%s4) CARGA COMPLETA con el %s apagado: pedido, cobro y mesa liberada (en el %s)%s\n' "$NEG" "$nom_caido" "$nom_vivo" "$RST"
+    echo "   Mesas libres:"
+    tabla "$vivo" "$DB" "SELECT numero_mesa AS mesa, capacidad, sector FROM mesas WHERE estado = 'LIBRE' ORDER BY numero_mesa"
+    while true; do
+        read -r -p "   Número de mesa: " mesa
+        idm=''
+        [[ "$mesa" =~ ^[0-9]+$ ]] && idm="$(sql_nodo "$vivo" "SELECT id_mesa FROM mesas WHERE numero_mesa = $mesa AND estado = 'LIBRE'")"
+        [[ -n "$idm" ]] && break
+        echo "   Esa mesa no existe o no está libre; elegí una de la lista."
+    done
+    echo "   Carta:"
+    tabla "$vivo" "$DB" "SELECT id_producto AS codigo, nombre, precio FROM productos_menu WHERE activo = 1 ORDER BY id_producto"
+    while true; do
+        read -r -p "   Código del plato: " prod
+        precio=''
+        [[ "$prod" =~ ^[0-9]+$ ]] && precio="$(sql_nodo "$vivo" "SELECT precio FROM productos_menu WHERE id_producto = $prod AND activo = 1")"
+        [[ -n "$precio" ]] && break
+        echo "   Código inválido; elegí uno de la carta."
+    done
+    while true; do
+        read -r -p "   Cantidad: " cant
+        [[ "$cant" =~ ^[1-9][0-9]?$ ]] && break
+        echo "   Ingresá un número entre 1 y 99."
+    done
+    echo
+    comando "START TRANSACTION;   -- en el $nom_vivo
+  UPDATE mesas SET estado = 'OCUPADA' WHERE numero_mesa = $mesa;
+  INSERT INTO comandas (...) VALUES ($idm, $idc, 'Mozo Demo', '$origen', 'ABIERTA');          -- apertura
+  INSERT INTO detalle_comanda (...) VALUES (..., $prod, $cant, $precio);                          -- plato
+  UPDATE comandas SET total = (SELECT SUM(subtotal) ...);
+  INSERT INTO pagos (id_comanda, metodo_pago, monto_total, nodo_caja) VALUES (..., 'EFECTIVO', total, '$origen');   -- cobro
+  UPDATE comandas SET estado = 'PAGADA', fecha_cierre = NOW();
+  UPDATE clientes SET puntos_fidelidad = puntos_fidelidad + total / 500;
+  UPDATE mesas SET estado = 'LIBRE' WHERE numero_mesa = $mesa;                                   -- mesa liberada
+  INSERT INTO historial_estados_comanda (...)   -- ABIERTA y PAGADA
+COMMIT;"
+    idcom="$(sql_err "$vivo" "START TRANSACTION;
+        UPDATE mesas SET estado = 'OCUPADA' WHERE id_mesa = $idm AND estado = 'LIBRE';
+        INSERT INTO comandas (id_mesa, id_cliente, mozo, nodo_origen, estado, total) VALUES ($idm, $idc, 'Mozo Demo', '$origen', 'ABIERTA', 0);
+        SET @c = LAST_INSERT_ID();
+        INSERT INTO historial_estados_comanda (id_comanda, estado_anterior, estado_nuevo, operador, nodo_emisor, observacion)
+            VALUES (@c, NULL, 'ABIERTA', 'Mozo Demo', '$origen', 'Apertura con el otro nodo apagado (demo)');
+        INSERT INTO detalle_comanda (id_comanda, id_producto, cantidad, precio_unitario, estado_cocina, punto_coccion)
+            VALUES (@c, $prod, $cant, $precio, 'ENTREGADO', 'NO_APLICA');
+        UPDATE comandas SET total = (SELECT SUM(subtotal) FROM detalle_comanda WHERE id_comanda = @c) WHERE id_comanda = @c;
+        INSERT INTO pagos (id_comanda, metodo_pago, tipo_comprobante, monto_total, nodo_caja)
+            VALUES (@c, 'EFECTIVO', 'TICKET_CONSUMO', (SELECT total FROM comandas WHERE id_comanda = @c), '$origen');
+        UPDATE comandas SET estado = 'PAGADA', fecha_cierre = NOW() WHERE id_comanda = @c;
+        INSERT INTO historial_estados_comanda (id_comanda, estado_anterior, estado_nuevo, operador, nodo_emisor, observacion)
+            VALUES (@c, 'ABIERTA', 'PAGADA', 'Caja Demo', '$origen', 'Cobro con el otro nodo apagado (demo)');
+        UPDATE clientes SET puntos_fidelidad = puntos_fidelidad + FLOOR((SELECT total FROM comandas WHERE id_comanda = @c) / 500) WHERE id_cliente = $idc;
+        UPDATE mesas SET estado = 'LIBRE' WHERE id_mesa = $idm;
+        COMMIT;
+        SELECT @c;")"
+    if [[ ! "$idcom" =~ ^[0-9]+$ ]]; then
+        printf '%s   ✘ No se pudo hacer la carga: %s%s\n' "$ROJO" "$idcom" "$RST"
+        prender_nodo "$caido" "$nom_caido"
+        return
+    fi
+    local pedido="SELECT co.id_comanda AS comanda, cl.nombre_completo AS cliente, m.numero_mesa AS mesa, m.estado AS estado_mesa, p.nombre AS plato, d.cantidad, co.total, co.estado, pg.metodo_pago AS pago, @@hostname AS leido_en
+            FROM comandas co JOIN detalle_comanda d ON d.id_comanda = co.id_comanda JOIN productos_menu p ON p.id_producto = d.id_producto
+            JOIN mesas m ON m.id_mesa = co.id_mesa LEFT JOIN clientes cl ON cl.id_cliente = co.id_cliente
+            LEFT JOIN pagos pg ON pg.id_comanda = co.id_comanda WHERE co.id_comanda = $idcom"
+    printf '%s   ✔ Comanda #%s cargada, cobrada y con la mesa liberada (ID %s: la generó el %s)%s\n' "$VERDE" "$idcom" "$paridad" "$nom_vivo" "$RST"
+    tabla "$vivo" "$DB" "$pedido"
+    pausa
+
+    # 5. Conteo con el nodo apagado
+    printf '\n%s5) El %s tiene los datos nuevos; el %s sigue apagado y no los tiene%s\n' "$NEG" "$nom_vivo" "$nom_caido" "$RST"
+    tabla "$vivo" "$DB" "$conteo"
+    pausa
+
+    # 6. Encendido
+    printf '\n%s6) Se vuelve a prender el %s%s\n' "$NEG" "$nom_caido" "$RST"
+    prender_nodo "$caido" "$nom_caido"
+    sleep 2
+
+    # 7. Verificación del nodo recuperado
+    printf '\n%s7) Verificación: el %s recibió todo lo que se cargó mientras estaba apagado%s\n' "$NEG" "$nom_caido" "$RST"
+    tabla "$caido" "$DB" "$ficha"
+    tabla "$caido" "$DB" "$pedido"
+    echo "   Conteo en los dos nodos:"
+    tabla "$N1" "$DB" "$conteo"
+    tabla "$N2" "$DB" "$conteo"
+    pausa
+    correr pruebas_fase2/verificar_consistencia.sh
+
+    echo
+    read -r -p "¿Borrar el cliente y el pedido cargados para dejar la base como estaba? (S/n): " r
+    [[ "$r" == [nN] ]] && return
+    comando "DELETE FROM pagos WHERE id_comanda = $idcom;   DELETE FROM comandas WHERE id_comanda = $idcom;   DELETE FROM clientes WHERE id_cliente = $idc;"
+    err="$(sql_err "$N1" "DELETE FROM pagos WHERE id_comanda = $idcom; DELETE FROM comandas WHERE id_comanda = $idcom; DELETE FROM clientes WHERE id_cliente = $idc;")"
+    [[ -n "$err" ]] && printf '%s   ✘ %s%s\n' "$ROJO" "$err" "$RST"
+    sleep 1
+    printf '   Lo cargado que queda: Nodo 1 = %s | Nodo 2 = %s\n' \
+        "$(sql_nodo "$N1" "SELECT (SELECT COUNT(*) FROM clientes WHERE id_cliente = $idc) + (SELECT COUNT(*) FROM comandas WHERE id_comanda = $idcom)")" \
+        "$(sql_nodo "$N2" "SELECT (SELECT COUNT(*) FROM clientes WHERE id_cliente = $idc) + (SELECT COUNT(*) FROM comandas WHERE id_comanda = $idcom)")"
+}
+
 fase1_flujo() {
     encabezado "FASE 1: FLUJO DISTRIBUIDO SALÓN → COCINA → CAJA"
     explicar "El Salón abre una comanda en el Nodo 1, la Cocina la ve replicada y la prepara en el Nodo 2," \
@@ -532,7 +692,7 @@ EOF
 # Recorrido completo, con pausa entre partes
 # --------------------------------------------------------------------------
 recorrido() {
-    local partes=(estado_cluster panel_haproxy replicacion_en_vivo consistencia fase1_flujo abm_completo fase1_restricciones fase2_failover
+    local partes=(estado_cluster panel_haproxy replicacion_en_vivo consistencia fase1_flujo abm_completo fase1_restricciones fase2_failover apagar_nodo
                   fase2_switchover fase2_particion fase2_backup fase3_en_vivo fase3_resumen tablero)
     local p r
     for p in "${partes[@]}"; do
@@ -563,6 +723,7 @@ ${CIAN}${NEG}══════════════════════�
    4) Restricciones de integridad                       (~30 s)
  ${NEG}Fase 2 - Resiliencia y respaldos${RST}
    5) Failover automático (cae un nodo)                 (~1 min)
+   N) Apagar un nodo a elección: alta + carga completa y verificación al volver
    6) Switchover planificado                            (~45 s)
    7) Partición de red y conflicto                      (~1,5 min)
    8) Desastre lógico, backup y PITR                    (~1-2 min)
@@ -594,6 +755,7 @@ while true; do
         3) fase1_flujo ;;
         4) fase1_restricciones ;;
         5) fase2_failover ;;
+        [nN]) apagar_nodo ;;
         6) fase2_switchover ;;
         7) fase2_particion ;;
         8) fase2_backup ;;
